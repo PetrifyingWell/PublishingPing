@@ -10,6 +10,8 @@ const USER_AGENT = 'Mozilla/5.0 (compatible; SteamPublishingListTool/1.0)';
 const NEW_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // "new" = first seen by this tool in the last 3 days
 const APPLIST_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CLASSIFICATIONS_PER_REQUEST = 25; // caps Steam calls per refresh when there's a backlog
+const CLASSIFY_TIME_BUDGET_MS = 8000; // stop starting new classifications once a refresh has spent this long
+const CLASSIFY_FETCH_TIMEOUT_MS = 8000; // per-call timeout for appdetails/tag lookups (best-effort, retried next refresh)
 const CLASSIFY_THROTTLE_MS = 600;
 
 // A seed of well-known Steam tag names to prime the filter's autocomplete.
@@ -82,7 +84,7 @@ async function getAppList() {
 async function fetchAppDetails(appid) {
   try {
     const url = `https://store.steampowered.com/api/appdetails?appids=${appid}&l=english`;
-    const data = await fetchJsonWithDiagnostics(url, { headers: { 'User-Agent': USER_AGENT } });
+    const data = await fetchJsonWithDiagnostics(url, { headers: { 'User-Agent': USER_AGENT } }, CLASSIFY_FETCH_TIMEOUT_MS);
     const entry = data[appid];
     if (!entry || !entry.success || !entry.data) return null;
     return entry.data;
@@ -94,7 +96,7 @@ async function fetchAppDetails(appid) {
 
 async function fetchStoreTags(appid) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), CLASSIFY_FETCH_TIMEOUT_MS);
   try {
     const url = `https://store.steampowered.com/app/${appid}/?l=english`;
     const res = await fetch(url, {
@@ -227,7 +229,9 @@ app.get('/api/games', async (req, res) => {
     }
 
     const batch = db.getPendingQueue().slice(0, MAX_CLASSIFICATIONS_PER_REQUEST);
+    const classifyStart = Date.now();
     for (const appid of batch) {
+      if (Date.now() - classifyStart > CLASSIFY_TIME_BUDGET_MS) break; // leave the rest queued for the next refresh
       try {
         const details = await classifyAppIdThrottled(appid);
         if (details) db.createGame(appid, details);

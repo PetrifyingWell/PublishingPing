@@ -351,6 +351,19 @@ function renderGames(games, emptyMessage) {
   }
 }
 
+async function fetchWithTimeout(url, timeoutMs = 60000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function loadNew() {
   const params = new URLSearchParams({
     term: document.getElementById('term').value || '',
@@ -362,7 +375,7 @@ async function loadNew() {
   resultsEl.innerHTML = '';
 
   try {
-    const res = await fetch(`/api/games?${params.toString()}`);
+    const res = await fetchWithTimeout(`/api/games?${params.toString()}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Request failed');
 
@@ -391,7 +404,7 @@ async function loadListTab(endpoint, emptyMessage) {
   resultsEl.innerHTML = '';
 
   try {
-    const res = await fetch(endpoint);
+    const res = await fetchWithTimeout(endpoint);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Request failed');
     renderGames(data.games, emptyMessage);
