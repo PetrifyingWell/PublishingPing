@@ -1,0 +1,17 @@
+{
+  "name": "steam-publishing-list-tool",
+  "version": "1.0.0",
+  "description": "Find newly-appeared Steam store pages (new releases / upcoming) filtered by genre, for publishing outreach.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "express": "^4.19.2"
+  }
+}
