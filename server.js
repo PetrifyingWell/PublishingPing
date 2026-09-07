@@ -35,15 +35,42 @@ const SEED_TAGS = [
 
 let appListCache = { data: null, fetchedAt: 0 };
 
+// Fetches a URL and gives a specific, actionable error on anything other
+// than a clean 2xx JSON response - a bare "status 403" or "Unexpected
+// token <" doesn't say whether Steam rate-limited us, served an HTML
+// block page, or something else entirely.
+async function fetchJsonWithDiagnostics(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error(`Request to ${url} timed out after ${timeoutMs}ms`);
+    const causeMsg = err.cause ? ` (${err.cause.message || err.cause})` : '';
+    throw new Error(`Request to ${url} failed: ${err.message}${causeMsg}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${url} responded with HTTP ${res.status}. Body (first 300 chars): ${text.slice(0, 300)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${url} did not return JSON. Body (first 300 chars): ${text.slice(0, 300)}`);
+  }
+}
+
 async function getAppList() {
   if (appListCache.data && Date.now() - appListCache.fetchedAt < APPLIST_CACHE_TTL_MS) {
     return appListCache.data;
   }
-  const res = await fetch('https://api.steampowered.com/ISteamApps/GetAppList/v2/', {
+  const data = await fetchJsonWithDiagnostics('https://api.steampowered.com/ISteamApps/GetAppList/v2/', {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
-  if (!res.ok) throw new Error(`GetAppList responded with status ${res.status}`);
-  const data = await res.json();
   const apps = (data.applist && data.applist.apps) || [];
   const normalized = apps
     .filter((a) => a && a.appid != null && a.name)
@@ -53,19 +80,25 @@ async function getAppList() {
 }
 
 async function fetchAppDetails(appid) {
-  const url = `https://store.steampowered.com/api/appdetails?appids=${appid}&l=english`;
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (!res.ok) return null;
-  const data = await res.json();
-  const entry = data[appid];
-  if (!entry || !entry.success || !entry.data) return null;
-  return entry.data;
+  try {
+    const url = `https://store.steampowered.com/api/appdetails?appids=${appid}&l=english`;
+    const data = await fetchJsonWithDiagnostics(url, { headers: { 'User-Agent': USER_AGENT } });
+    const entry = data[appid];
+    if (!entry || !entry.success || !entry.data) return null;
+    return entry.data;
+  } catch (err) {
+    console.error(`Failed to fetch appdetails for ${appid}:`, err.message);
+    return null;
+  }
 }
 
 async function fetchStoreTags(appid) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const url = `https://store.steampowered.com/app/${appid}/?l=english`;
     const res = await fetch(url, {
+      signal: controller.signal,
       headers: {
         'User-Agent': USER_AGENT,
         // Bypasses Steam's age-gate interstitial so the real page (and its tags) loads.
@@ -84,6 +117,8 @@ async function fetchStoreTags(appid) {
   } catch (err) {
     console.error(`Failed to fetch store tags for ${appid}:`, err.message);
     return [];
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
