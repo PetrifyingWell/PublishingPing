@@ -1,63 +1,34 @@
-const fs = require('fs');
-const path = require('path');
+const { Redis } = require('@upstash/redis');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_PATH = path.join(DATA_DIR, 'db.json');
+// Supports both the older Vercel KV env var names and the Upstash
+// marketplace integration's names, since either could be what's wired up
+// in the Vercel project depending on which storage integration was added.
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function load() {
-  ensureDataDir();
-  if (!fs.existsSync(DB_PATH)) return { games: {}, knownAppIds: [], pendingClassification: {} };
-  try {
-    const parsed = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
-    return {
-      games: parsed.games || {},
-      knownAppIds: parsed.knownAppIds || [],
-      // appid -> ISO timestamp of when it was first diffed as new (not when
-      // it finishes classification, which can lag behind under a backlog).
-      pendingClassification: parsed.pendingClassification || {},
-    };
-  } catch (err) {
-    console.error('Failed to read db.json, starting fresh:', err.message);
-    return { games: {}, knownAppIds: [], pendingClassification: {} };
-  }
-}
-
-const state = load();
-
-function save() {
-  ensureDataDir();
-  fs.writeFileSync(DB_PATH, JSON.stringify(state, null, 2));
-}
+const GAMES_KEY = 'steam-publishing-list:games'; // hash: appid -> JSON game record
+const KNOWN_APPIDS_KEY = 'steam-publishing-list:knownAppIds'; // set: appid
+const PENDING_KEY = 'steam-publishing-list:pendingClassification'; // hash: appid -> discoveredAt ISO string
 
 // --- App ID ledger: every appid we've ever observed in Steam's full app
 // list, regardless of whether it turned out to be a game worth tracking.
 // This is what lets us detect "just appeared on Steam" via diffing.
 
-function getKnownAppIdSet() {
-  return new Set(state.knownAppIds);
+async function getKnownAppIdSet() {
+  const members = await redis.smembers(KNOWN_APPIDS_KEY);
+  return new Set(members);
 }
 
-function isBootstrapped() {
-  return state.knownAppIds.length > 0;
+async function isBootstrapped() {
+  const count = await redis.scard(KNOWN_APPIDS_KEY);
+  return count > 0;
 }
 
-function addKnownAppIds(appids) {
-  const set = getKnownAppIdSet();
-  let changed = false;
-  for (const id of appids) {
-    if (!set.has(id)) {
-      set.add(id);
-      changed = true;
-    }
-  }
-  if (changed) {
-    state.knownAppIds = [...set];
-    save();
-  }
+async function addKnownAppIds(appids) {
+  if (appids.length === 0) return;
+  await redis.sadd(KNOWN_APPIDS_KEY, ...appids);
 }
 
 // --- Classification queue: newly-diffed appids waiting on an appdetails +
@@ -65,60 +36,66 @@ function addKnownAppIds(appids) {
 // entry remembers when it was *discovered* (diffed as new), independent of
 // how long it then waits in the queue for its Steam calls to run.
 
-function getPendingQueue() {
-  return Object.entries(state.pendingClassification).map(([appid, discoveredAt]) => ({ appid, discoveredAt }));
+async function getPendingQueue() {
+  const map = (await redis.hgetall(PENDING_KEY)) || {};
+  return Object.entries(map).map(([appid, discoveredAt]) => ({ appid, discoveredAt }));
 }
 
-function enqueuePending(appids) {
+async function enqueuePending(appids) {
   const now = new Date().toISOString();
-  let changed = false;
-  for (const id of appids) {
-    if (!(id in state.pendingClassification)) {
-      state.pendingClassification[id] = now;
-      changed = true;
-    }
-  }
-  if (changed) save();
+  // hsetnx so an appid already in the queue keeps its original discovery
+  // time rather than getting bumped forward on a later diff.
+  await Promise.all(appids.map((id) => redis.hsetnx(PENDING_KEY, id, now)));
 }
 
-function dequeuePending(appid) {
-  if (appid in state.pendingClassification) {
-    delete state.pendingClassification[appid];
-    save();
-  }
+async function dequeuePending(appid) {
+  await redis.hdel(PENDING_KEY, appid);
 }
 
 // --- Tracked games: appids that classified as real, unreleased games.
 
-function createGame(appid, details, firstSeenAt) {
-  state.games[appid] = {
+async function createGame(appid, details, firstSeenAt) {
+  const record = {
     appid,
     firstSeenAt: firstSeenAt || new Date().toISOString(),
     status: 'new',
     viewedAt: null,
     details,
   };
-  save();
-  return state.games[appid];
+  await redis.hset(GAMES_KEY, { [appid]: JSON.stringify(record) });
+  return record;
 }
 
-function setStatus(appid, status) {
-  const game = state.games[appid];
+async function setStatus(appid, status) {
+  const game = await getGame(appid);
   if (!game) return null;
   game.status = status;
   game.viewedAt = status === 'new' ? null : new Date().toISOString();
-  save();
+  await redis.hset(GAMES_KEY, { [appid]: JSON.stringify(game) });
   return game;
 }
 
-function getGame(appid) {
-  return state.games[appid];
+async function getGame(appid) {
+  const raw = await redis.hget(GAMES_KEY, appid);
+  if (!raw) return null;
+  // The Upstash client sometimes auto-parses JSON values already; handle both.
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
 }
 
-function all() {
-  // Filters out any record missing details - defends against stale/
-  // incompatible entries left behind by an older version of this schema.
-  return Object.values(state.games).filter((g) => g.details);
+async function all() {
+  const map = (await redis.hgetall(GAMES_KEY)) || {};
+  const games = [];
+  for (const raw of Object.values(map)) {
+    try {
+      const game = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      // Filters out any record missing details - defends against stale/
+      // incompatible entries left behind by an older version of this schema.
+      if (game && game.details) games.push(game);
+    } catch {
+      // Skip anything that isn't valid JSON rather than failing the whole list.
+    }
+  }
+  return games;
 }
 
 module.exports = {

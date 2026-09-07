@@ -18,7 +18,6 @@ const MAX_CLASSIFICATIONS_PER_BATCH = 25; // caps Steam calls per classification
 const CLASSIFY_TIME_BUDGET_MS = 8000; // stop starting new classifications once a pass has spent this long
 const CLASSIFY_FETCH_TIMEOUT_MS = 8000; // per-call timeout for appdetails/tag lookups (best-effort, retried later)
 const CLASSIFY_THROTTLE_MS = 600;
-const BACKGROUND_CLASSIFY_INTERVAL_MS = 20000; // keeps draining the backlog even if nobody is refreshing
 
 // A seed of well-known Steam tag names to prime the filter's autocomplete.
 // Filtering itself matches against each game's own scraped tags (below),
@@ -248,9 +247,10 @@ function formatGameRecord(record) {
 // game record stamped with its true discovery time (not now - a backlog
 // item can otherwise wait so long that it gets born already stale, or
 // worse, ages out of the 3-day window before ever being classified).
-// Runs both on a timer (so the backlog drains even with nobody refreshing)
-// and opportunistically from a request; the lock just prevents the two
-// from overlapping, it's not a hard dependency of either caller.
+// There's no persistent background process in a serverless deployment, so
+// this only runs opportunistically from a request (or a Vercel Cron hit,
+// see vercel.json) - the lock just prevents two overlapping invocations
+// within the same warm function instance from racing each other.
 let classifying = false;
 
 async function processClassificationQueue() {
@@ -261,21 +261,21 @@ async function processClassificationQueue() {
 
     // Anything already older than the "new" window will never qualify once
     // classified, so don't spend a Steam call finding that out.
-    for (const { appid, discoveredAt } of db.getPendingQueue()) {
-      if (now - new Date(discoveredAt).getTime() > NEW_WINDOW_MS) db.dequeuePending(appid);
+    for (const { appid, discoveredAt } of await db.getPendingQueue()) {
+      if (now - new Date(discoveredAt).getTime() > NEW_WINDOW_MS) await db.dequeuePending(appid);
     }
 
-    const batch = db.getPendingQueue().slice(0, MAX_CLASSIFICATIONS_PER_BATCH);
+    const batch = (await db.getPendingQueue()).slice(0, MAX_CLASSIFICATIONS_PER_BATCH);
     const classifyStart = Date.now();
     for (const { appid, discoveredAt } of batch) {
       if (Date.now() - classifyStart > CLASSIFY_TIME_BUDGET_MS) break; // leave the rest for the next pass
       try {
         const details = await classifyAppIdThrottled(appid);
-        if (details) db.createGame(appid, details, discoveredAt);
+        if (details) await db.createGame(appid, details, discoveredAt);
       } catch (err) {
         console.error(`Failed to classify ${appid}:`, err.message);
       } finally {
-        db.dequeuePending(appid);
+        await db.dequeuePending(appid);
       }
     }
   } finally {
@@ -283,20 +283,21 @@ async function processClassificationQueue() {
   }
 }
 
-setInterval(() => {
-  processClassificationQueue().catch((err) => console.error('Background classification pass failed:', err.message));
-}, BACKGROUND_CLASSIFY_INTERVAL_MS);
-
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/api/tags', (req, res) => {
-  const observed = new Set();
-  for (const g of db.all()) {
-    for (const t of (g.details && g.details.tags) || []) observed.add(t);
+app.get('/api/tags', async (req, res) => {
+  try {
+    const observed = new Set();
+    for (const g of await db.all()) {
+      for (const t of (g.details && g.details.tags) || []) observed.add(t);
+    }
+    const tags = [...new Set([...SEED_TAGS, ...observed])].sort((a, b) => a.localeCompare(b));
+    res.json({ tags, count: tags.length });
+  } catch (err) {
+    console.error('Failed to build tag list:', err);
+    res.status(502).json({ error: 'Failed to read the database.', detail: err.message });
   }
-  const tags = [...new Set([...SEED_TAGS, ...observed])].sort((a, b) => a.localeCompare(b));
-  res.json({ tags, count: tags.length });
 });
 
 app.get('/api/games', async (req, res) => {
@@ -305,11 +306,11 @@ app.get('/api/games', async (req, res) => {
   try {
     const appList = await getAppList();
 
-    if (!db.isBootstrapped()) {
+    if (!(await db.isBootstrapped())) {
       // First-ever run: we have nothing to diff against yet, so record the
       // current full app list as the baseline without classifying ~150k+
       // appids. New pages become visible starting from the next refresh.
-      db.addKnownAppIds(appList.map((a) => a.appid));
+      await db.addKnownAppIds(appList.map((a) => a.appid));
       return res.json({
         bootstrap: true,
         message: `Seeded baseline with ${appList.length.toLocaleString()} known Steam app IDs. New pages will start appearing on your next refresh.`,
@@ -319,18 +320,16 @@ app.get('/api/games', async (req, res) => {
       });
     }
 
-    const knownSet = db.getKnownAppIdSet();
+    const knownSet = await db.getKnownAppIdSet();
     const newAppIds = appList.filter((a) => !knownSet.has(a.appid)).map((a) => a.appid);
     if (newAppIds.length > 0) {
-      db.addKnownAppIds(newAppIds);
-      db.enqueuePending(newAppIds);
+      await db.addKnownAppIds(newAppIds);
+      await db.enqueuePending(newAppIds);
     }
 
-    // Best-effort: if a background pass isn't already running, get a head
-    // start on the queue so a manual refresh feels responsive. If one IS
-    // already running (the 20s timer), this just no-ops and we serve
-    // whatever's already classified - the response still reports how much
-    // is left, and it'll be caught on the next pass regardless.
+    // Best-effort: there's no persistent background process in a serverless
+    // deployment, so this is what actually drains the classification queue -
+    // either a manual refresh, or a Vercel Cron hit (see vercel.json).
     await processClassificationQueue();
 
     const tagFilters = tags
@@ -340,7 +339,7 @@ app.get('/api/games', async (req, res) => {
     const termFilter = term.trim().toLowerCase();
     const now = Date.now();
 
-    const candidates = db.all().filter((g) => {
+    const candidates = (await db.all()).filter((g) => {
       if (g.status !== 'new') return false;
       if (now - new Date(g.firstSeenAt).getTime() > NEW_WINDOW_MS) return false;
       if (tagFilters.length > 0) {
@@ -356,7 +355,7 @@ app.get('/api/games', async (req, res) => {
     res.json({
       bootstrap: false,
       count: candidates.length,
-      queueRemaining: db.getPendingQueue().length,
+      queueRemaining: (await db.getPendingQueue()).length,
       games: candidates.map(formatGameRecord),
     });
   } catch (err) {
@@ -368,40 +367,61 @@ app.get('/api/games', async (req, res) => {
   }
 });
 
-app.get('/api/history', (req, res) => {
-  const games = db
-    .all()
-    .filter((g) => g.status !== 'new')
-    .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))
-    .map(formatGameRecord);
-  res.json({ games });
+app.get('/api/history', async (req, res) => {
+  try {
+    const games = (await db.all())
+      .filter((g) => g.status !== 'new')
+      .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))
+      .map(formatGameRecord);
+    res.json({ games });
+  } catch (err) {
+    console.error('Failed to build history list:', err);
+    res.status(502).json({ error: 'Failed to read the database.', detail: err.message });
+  }
 });
 
-app.get('/api/shortlist', (req, res) => {
-  const games = db
-    .all()
-    .filter((g) => g.status === 'shortlisted')
-    .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))
-    .map(formatGameRecord);
-  res.json({ games });
+app.get('/api/shortlist', async (req, res) => {
+  try {
+    const games = (await db.all())
+      .filter((g) => g.status === 'shortlisted')
+      .sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt))
+      .map(formatGameRecord);
+    res.json({ games });
+  } catch (err) {
+    console.error('Failed to build shortlist:', err);
+    res.status(502).json({ error: 'Failed to read the database.', detail: err.message });
+  }
 });
 
-app.post('/api/games/:appid/status', (req, res) => {
+app.post('/api/games/:appid/status', async (req, res) => {
   const { status } = req.body || {};
   if (!['new', 'shortlisted', 'dismissed'].includes(status)) {
     return res.status(400).json({ error: 'status must be one of: new, shortlisted, dismissed' });
   }
-  const record = db.setStatus(req.params.appid, status);
-  if (!record) return res.status(404).json({ error: 'Unknown appid (has it been classified yet?)' });
-  res.json({ game: formatGameRecord(record) });
+  try {
+    const record = await db.setStatus(req.params.appid, status);
+    if (!record) return res.status(404).json({ error: 'Unknown appid (has it been classified yet?)' });
+    res.json({ game: formatGameRecord(record) });
+  } catch (err) {
+    console.error('Failed to update game status:', err);
+    res.status(502).json({ error: 'Failed to write to the database.', detail: err.message });
+  }
 });
 
-app.listen(PORT, () => {
-  console.log(`Steam Publishing List Tool running at http://localhost:${PORT}`);
-  console.log(
-    process.env.STEAM_API_KEY
-      ? 'STEAM_API_KEY detected - will fall back to IStoreService/GetAppList if the classic endpoint is unavailable.'
-      : `STEAM_API_KEY not set (looked for a .env file at ${path.join(__dirname, '.env')}) - only the classic ` +
-          'ISteamApps/GetAppList endpoint will be used.'
-  );
-});
+// Only start a listening server for local dev (`node server.js` / `npm
+// start`). On Vercel, this file is required by api/index.js and exported
+// as a serverless function handler instead - Vercel calls the app directly
+// per-request rather than needing it to bind a port.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Steam Publishing List Tool running at http://localhost:${PORT}`);
+    console.log(
+      process.env.STEAM_API_KEY
+        ? 'STEAM_API_KEY detected - will fall back to IStoreService/GetAppList if the classic endpoint is unavailable.'
+        : `STEAM_API_KEY not set (looked for a .env file at ${path.join(__dirname, '.env')}) - only the classic ` +
+            'ISteamApps/GetAppList endpoint will be used.'
+    );
+  });
+}
+
+module.exports = app;

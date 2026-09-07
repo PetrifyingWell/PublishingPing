@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" }
+  ],
+  "crons": [
+    { "path": "/api/games", "schedule": "0 * * * *" }
+  ]
+}
