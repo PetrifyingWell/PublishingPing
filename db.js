@@ -10,17 +10,19 @@ function ensureDataDir() {
 
 function load() {
   ensureDataDir();
-  if (!fs.existsSync(DB_PATH)) return { games: {}, knownAppIds: [], pendingClassification: [] };
+  if (!fs.existsSync(DB_PATH)) return { games: {}, knownAppIds: [], pendingClassification: {} };
   try {
     const parsed = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
     return {
       games: parsed.games || {},
       knownAppIds: parsed.knownAppIds || [],
-      pendingClassification: parsed.pendingClassification || [],
+      // appid -> ISO timestamp of when it was first diffed as new (not when
+      // it finishes classification, which can lag behind under a backlog).
+      pendingClassification: parsed.pendingClassification || {},
     };
   } catch (err) {
     console.error('Failed to read db.json, starting fresh:', err.message);
-    return { games: {}, knownAppIds: [], pendingClassification: [] };
+    return { games: {}, knownAppIds: [], pendingClassification: {} };
   }
 }
 
@@ -59,31 +61,39 @@ function addKnownAppIds(appids) {
 }
 
 // --- Classification queue: newly-diffed appids waiting on an appdetails +
-// tag lookup to determine whether they're a real, unreleased game.
+// tag lookup to determine whether they're a real, unreleased game. Each
+// entry remembers when it was *discovered* (diffed as new), independent of
+// how long it then waits in the queue for its Steam calls to run.
 
 function getPendingQueue() {
-  return state.pendingClassification;
+  return Object.entries(state.pendingClassification).map(([appid, discoveredAt]) => ({ appid, discoveredAt }));
 }
 
 function enqueuePending(appids) {
-  const queue = new Set(state.pendingClassification);
-  for (const id of appids) queue.add(id);
-  state.pendingClassification = [...queue];
-  save();
+  const now = new Date().toISOString();
+  let changed = false;
+  for (const id of appids) {
+    if (!(id in state.pendingClassification)) {
+      state.pendingClassification[id] = now;
+      changed = true;
+    }
+  }
+  if (changed) save();
 }
 
 function dequeuePending(appid) {
-  state.pendingClassification = state.pendingClassification.filter((id) => id !== appid);
-  save();
+  if (appid in state.pendingClassification) {
+    delete state.pendingClassification[appid];
+    save();
+  }
 }
 
 // --- Tracked games: appids that classified as real, unreleased games.
 
-function createGame(appid, details) {
-  const now = new Date().toISOString();
+function createGame(appid, details, firstSeenAt) {
   state.games[appid] = {
     appid,
-    firstSeenAt: now,
+    firstSeenAt: firstSeenAt || new Date().toISOString(),
     status: 'new',
     viewedAt: null,
     details,

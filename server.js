@@ -9,10 +9,11 @@ const PORT = process.env.PORT || 3000;
 const USER_AGENT = 'Mozilla/5.0 (compatible; SteamPublishingListTool/1.0)';
 const NEW_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // "new" = first seen by this tool in the last 3 days
 const APPLIST_CACHE_TTL_MS = 5 * 60 * 1000;
-const MAX_CLASSIFICATIONS_PER_REQUEST = 25; // caps Steam calls per refresh when there's a backlog
-const CLASSIFY_TIME_BUDGET_MS = 8000; // stop starting new classifications once a refresh has spent this long
-const CLASSIFY_FETCH_TIMEOUT_MS = 8000; // per-call timeout for appdetails/tag lookups (best-effort, retried next refresh)
+const MAX_CLASSIFICATIONS_PER_BATCH = 25; // caps Steam calls per classification pass when there's a backlog
+const CLASSIFY_TIME_BUDGET_MS = 8000; // stop starting new classifications once a pass has spent this long
+const CLASSIFY_FETCH_TIMEOUT_MS = 8000; // per-call timeout for appdetails/tag lookups (best-effort, retried later)
 const CLASSIFY_THROTTLE_MS = 600;
+const BACKGROUND_CLASSIFY_INTERVAL_MS = 20000; // keeps draining the backlog even if nobody is refreshing
 
 // A seed of well-known Steam tag names to prime the filter's autocomplete.
 // Filtering itself matches against each game's own scraped tags (below),
@@ -189,6 +190,50 @@ function formatGameRecord(record) {
   };
 }
 
+// Drains the classification queue: for each pending appid, runs the
+// appdetails + tag lookup and, if it's a real unreleased game, creates its
+// game record stamped with its true discovery time (not now - a backlog
+// item can otherwise wait so long that it gets born already stale, or
+// worse, ages out of the 3-day window before ever being classified).
+// Runs both on a timer (so the backlog drains even with nobody refreshing)
+// and opportunistically from a request; the lock just prevents the two
+// from overlapping, it's not a hard dependency of either caller.
+let classifying = false;
+
+async function processClassificationQueue() {
+  if (classifying) return;
+  classifying = true;
+  try {
+    const now = Date.now();
+
+    // Anything already older than the "new" window will never qualify once
+    // classified, so don't spend a Steam call finding that out.
+    for (const { appid, discoveredAt } of db.getPendingQueue()) {
+      if (now - new Date(discoveredAt).getTime() > NEW_WINDOW_MS) db.dequeuePending(appid);
+    }
+
+    const batch = db.getPendingQueue().slice(0, MAX_CLASSIFICATIONS_PER_BATCH);
+    const classifyStart = Date.now();
+    for (const { appid, discoveredAt } of batch) {
+      if (Date.now() - classifyStart > CLASSIFY_TIME_BUDGET_MS) break; // leave the rest for the next pass
+      try {
+        const details = await classifyAppIdThrottled(appid);
+        if (details) db.createGame(appid, details, discoveredAt);
+      } catch (err) {
+        console.error(`Failed to classify ${appid}:`, err.message);
+      } finally {
+        db.dequeuePending(appid);
+      }
+    }
+  } finally {
+    classifying = false;
+  }
+}
+
+setInterval(() => {
+  processClassificationQueue().catch((err) => console.error('Background classification pass failed:', err.message));
+}, BACKGROUND_CLASSIFY_INTERVAL_MS);
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -228,19 +273,12 @@ app.get('/api/games', async (req, res) => {
       db.enqueuePending(newAppIds);
     }
 
-    const batch = db.getPendingQueue().slice(0, MAX_CLASSIFICATIONS_PER_REQUEST);
-    const classifyStart = Date.now();
-    for (const appid of batch) {
-      if (Date.now() - classifyStart > CLASSIFY_TIME_BUDGET_MS) break; // leave the rest queued for the next refresh
-      try {
-        const details = await classifyAppIdThrottled(appid);
-        if (details) db.createGame(appid, details);
-      } catch (err) {
-        console.error(`Failed to classify ${appid}:`, err.message);
-      } finally {
-        db.dequeuePending(appid);
-      }
-    }
+    // Best-effort: if a background pass isn't already running, get a head
+    // start on the queue so a manual refresh feels responsive. If one IS
+    // already running (the 20s timer), this just no-ops and we serve
+    // whatever's already classified - the response still reports how much
+    // is left, and it'll be caught on the next pass regardless.
+    await processClassificationQueue();
 
     const tagFilters = tags
       .split(',')
