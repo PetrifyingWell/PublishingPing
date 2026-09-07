@@ -116,7 +116,9 @@ function getGame(appid) {
 }
 
 function all() {
-  return Object.values(state.games);
+  // Filters out any record missing details - defends against stale/
+  // incompatible entries left behind by an older version of this schema.
+  return Object.values(state.games).filter((g) => g.details);
 }
 
 module.exports = {
