@@ -1,28 +1,24 @@
-const { Redis } = require('@upstash/redis');
+const Redis = require('ioredis');
 
-// Supports both the older Vercel KV env var names and the Upstash
-// marketplace integration's names, since either could be what's wired up
-// in the Vercel project depending on which storage integration was added.
 // Built lazily (and with an explicit check) rather than at module load, so
 // a missing/misscoped env var produces a clear, actionable error message
-// instead of the Upstash SDK's cryptic "Failed to parse URL from /pipeline"
-// when it tries to build a request against an empty base URL.
+// instead of a cryptic connection failure buried in the client's internals.
 let redisClient = null;
 
 function getRedisClient() {
   if (redisClient) return redisClient;
 
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
+  const url = process.env.REDIS_URL;
+  if (!url) {
     throw new Error(
-      'Redis is not configured: no KV_REST_API_URL/KV_REST_API_TOKEN or UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN ' +
-        'environment variables found. Connect a Redis database to this Vercel project (Storage tab), confirm those ' +
-        "variables are enabled for this deployment's environment (Production/Preview/Development), then redeploy."
+      'Redis is not configured: no REDIS_URL environment variable found. Connect a Redis database to this Vercel ' +
+        "project (Storage tab), confirm REDIS_URL is enabled for this deployment's environment " +
+        '(Production/Preview/Development), then redeploy.'
     );
   }
 
-  redisClient = new Redis({ url, token });
+  redisClient = new Redis(url, { maxRetriesPerRequest: 3 });
+  redisClient.on('error', (err) => console.error('Redis client error:', err.message));
   return redisClient;
 }
 
