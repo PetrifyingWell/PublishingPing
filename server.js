@@ -67,17 +67,65 @@ async function fetchJsonWithDiagnostics(url, options = {}, timeoutMs = 15000) {
   }
 }
 
+// IStoreService/GetAppList needs a free Steam Web API key (get one at
+// https://steamcommunity.com/dev/apikey, then set STEAM_API_KEY). It's the
+// modern replacement for the classic keyless ISteamApps/GetAppList/v2,
+// which is tried first below and appears to have been retired by Valve.
+async function getAppListViaStoreService(apiKey) {
+  const apps = [];
+  let lastAppId = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const params = new URLSearchParams({
+      key: apiKey,
+      include_games: 'true',
+      include_dlc: 'false',
+      include_software: 'false',
+      include_videos: 'false',
+      include_hardware: 'false',
+      max_results: '50000',
+      last_appid: String(lastAppId),
+    });
+    const url = `https://api.steampowered.com/IStoreService/GetAppList/v1/?${params.toString()}`;
+    const data = await fetchJsonWithDiagnostics(url, { headers: { 'User-Agent': USER_AGENT } });
+    const response = data.response || {};
+    const pageApps = response.apps || [];
+    apps.push(...pageApps);
+    hasMore = !!response.have_more_results && pageApps.length > 0;
+    lastAppId = response.last_appid;
+  }
+
+  return apps.filter((a) => a && a.appid != null && a.name).map((a) => ({ appid: String(a.appid), name: a.name }));
+}
+
 async function getAppList() {
   if (appListCache.data && Date.now() - appListCache.fetchedAt < APPLIST_CACHE_TTL_MS) {
     return appListCache.data;
   }
-  const data = await fetchJsonWithDiagnostics('https://api.steampowered.com/ISteamApps/GetAppList/v2/', {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-  });
-  const apps = (data.applist && data.applist.apps) || [];
-  const normalized = apps
-    .filter((a) => a && a.appid != null && a.name)
-    .map((a) => ({ appid: String(a.appid), name: a.name }));
+
+  const apiKey = process.env.STEAM_API_KEY;
+  let normalized;
+
+  try {
+    const data = await fetchJsonWithDiagnostics('https://api.steampowered.com/ISteamApps/GetAppList/v2/', {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    });
+    const apps = (data.applist && data.applist.apps) || [];
+    normalized = apps
+      .filter((a) => a && a.appid != null && a.name)
+      .map((a) => ({ appid: String(a.appid), name: a.name }));
+  } catch (legacyErr) {
+    if (!apiKey) {
+      throw new Error(
+        `${legacyErr.message} | Steam's free app-list endpoint (ISteamApps/GetAppList) appears to be unavailable. ` +
+          'Get a free Steam Web API key at https://steamcommunity.com/dev/apikey, set it as the STEAM_API_KEY ' +
+          'environment variable, and restart the server to use IStoreService/GetAppList instead.'
+      );
+    }
+    normalized = await getAppListViaStoreService(apiKey);
+  }
+
   appListCache = { data: normalized, fetchedAt: Date.now() };
   return normalized;
 }
