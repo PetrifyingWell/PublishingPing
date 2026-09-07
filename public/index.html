@@ -9,67 +9,26 @@
 <body>
   <header>
     <h1>Steam Publishing List Tool</h1>
-    <p class="subtitle">Newly-appeared Steam store pages, filtered for publishing outreach.</p>
+    <p class="subtitle">Newly-appeared, unreleased Steam store pages for publishing outreach.</p>
   </header>
 
-  <form id="filters">
-    <div class="field">
-      <label for="list">List</label>
-      <select id="list" name="list">
-        <option value="new">New Releases</option>
-        <option value="comingsoon">Coming Soon (Upcoming)</option>
-        <option value="all">All (sorted by release date)</option>
-      </select>
-    </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="new">New</button>
+    <button class="tab-btn" data-tab="shortlist">Shortlist</button>
+    <button class="tab-btn" data-tab="history">History</button>
+  </nav>
 
-    <div class="field">
-      <label for="genre">Genre</label>
-      <select id="genre" name="genre">
-        <option value="">Any</option>
-        <option value="Action">Action</option>
-        <option value="Adventure">Adventure</option>
-        <option value="Casual">Casual</option>
-        <option value="Early Access">Early Access</option>
-        <option value="Free to Play">Free to Play</option>
-        <option value="Indie">Indie</option>
-        <option value="Massively Multiplayer">Massively Multiplayer</option>
-        <option value="Racing">Racing</option>
-        <option value="RPG">RPG</option>
-        <option value="Simulation">Simulation</option>
-        <option value="Sports">Sports</option>
-        <option value="Strategy">Strategy</option>
-      </select>
+  <form id="filters">
+    <div class="field tag-field">
+      <label for="tagInput">Steam tags</label>
+      <input type="text" id="tagInput" autocomplete="off" placeholder="Start typing a tag, e.g. Roguelike" />
+      <div id="tagSuggestions" class="tag-suggestions" hidden></div>
+      <div id="selectedTags" class="tag-chips"></div>
     </div>
 
     <div class="field">
       <label for="term">Search term</label>
       <input type="text" id="term" name="term" placeholder="optional keyword" />
-    </div>
-
-    <div class="field">
-      <label for="minReview">Min review %</label>
-      <input type="number" id="minReview" name="minReview" min="0" max="100" placeholder="e.g. 70" />
-    </div>
-
-    <div class="field">
-      <label for="maxPrice">Max price (USD)</label>
-      <input type="number" id="maxPrice" name="maxPrice" min="0" step="0.01" placeholder="e.g. 20" />
-    </div>
-
-    <div class="field checkbox-field">
-      <label for="freeOnly">
-        <input type="checkbox" id="freeOnly" name="freeOnly" />
-        Free to Play only
-      </label>
-    </div>
-
-    <div class="field">
-      <label for="count">Results</label>
-      <select id="count" name="count">
-        <option value="25">25</option>
-        <option value="50" selected>50</option>
-        <option value="100">100</option>
-      </select>
     </div>
 
     <button type="submit" id="refreshBtn">Refresh</button>
