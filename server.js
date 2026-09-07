@@ -1,8 +1,11 @@
-require('dotenv').config();
+const path = require('path');
+// Load .env from this file's own directory, not the current working
+// directory - the two can easily differ (e.g. running `npm start` from a
+// parent folder), and dotenv fails silently if it looks in the wrong place.
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
 const cheerio = require('cheerio');
-const path = require('path');
 const db = require('./db');
 
 const app = express();
@@ -395,4 +398,10 @@ app.post('/api/games/:appid/status', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Steam Publishing List Tool running at http://localhost:${PORT}`);
+  console.log(
+    process.env.STEAM_API_KEY
+      ? 'STEAM_API_KEY detected - will fall back to IStoreService/GetAppList if the classic endpoint is unavailable.'
+      : `STEAM_API_KEY not set (looked for a .env file at ${path.join(__dirname, '.env')}) - only the classic ` +
+          'ISteamApps/GetAppList endpoint will be used.'
+  );
 });
