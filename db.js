@@ -40,9 +40,15 @@ async function isBootstrapped() {
   return count > 0;
 }
 
+const SADD_CHUNK_SIZE = 5000; // spreading the full ~150k+ app catalog in one call blows V8's argument limit
+
 async function addKnownAppIds(appids) {
   if (appids.length === 0) return;
-  await getRedisClient().sadd(KNOWN_APPIDS_KEY, ...appids);
+  const client = getRedisClient();
+  for (let i = 0; i < appids.length; i += SADD_CHUNK_SIZE) {
+    const chunk = appids.slice(i, i + SADD_CHUNK_SIZE);
+    await client.sadd(KNOWN_APPIDS_KEY, ...chunk);
+  }
 }
 
 // --- Classification queue: newly-diffed appids waiting on an appdetails +

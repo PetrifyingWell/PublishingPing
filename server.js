@@ -95,7 +95,9 @@ async function getAppListViaStoreService(apiKey) {
     const data = await fetchJsonWithDiagnostics(url, { headers: { 'User-Agent': USER_AGENT } });
     const response = data.response || {};
     const pageApps = response.apps || [];
-    apps.push(...pageApps);
+    // Not apps.push(...pageApps) - a full 50k-per-page spread risks the
+    // same "Maximum call stack size exceeded" as the known-appids sadd did.
+    for (const app of pageApps) apps.push(app);
     hasMore = !!response.have_more_results && pageApps.length > 0;
     lastAppId = response.last_appid;
   }
