@@ -10,12 +10,17 @@ function ensureDataDir() {
 
 function load() {
   ensureDataDir();
-  if (!fs.existsSync(DB_PATH)) return { games: {} };
+  if (!fs.existsSync(DB_PATH)) return { games: {}, knownAppIds: [], pendingClassification: [] };
   try {
-    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    return {
+      games: parsed.games || {},
+      knownAppIds: parsed.knownAppIds || [],
+      pendingClassification: parsed.pendingClassification || [],
+    };
   } catch (err) {
     console.error('Failed to read db.json, starting fresh:', err.message);
-    return { games: {} };
+    return { games: {}, knownAppIds: [], pendingClassification: [] };
   }
 }
 
@@ -26,34 +31,65 @@ function save() {
   fs.writeFileSync(DB_PATH, JSON.stringify(state, null, 2));
 }
 
-// Records that we've seen this appid in a live Steam search result. Creates
-// a new "new" record on first sighting (this is what "first seen" tracking
-// is based on), or refreshes the cached search snapshot on repeat sightings.
-function upsertSeen(appid, searchSnapshot) {
-  const now = new Date().toISOString();
-  const existing = state.games[appid];
-  if (existing) {
-    existing.lastSeenAt = now;
-    existing.lastSearchSnapshot = searchSnapshot;
-  } else {
-    state.games[appid] = {
-      appid,
-      firstSeenAt: now,
-      lastSeenAt: now,
-      status: 'new',
-      viewedAt: null,
-      details: null,
-      lastSearchSnapshot: searchSnapshot,
-    };
-  }
-  save();
-  return state.games[appid];
+// --- App ID ledger: every appid we've ever observed in Steam's full app
+// list, regardless of whether it turned out to be a game worth tracking.
+// This is what lets us detect "just appeared on Steam" via diffing.
+
+function getKnownAppIdSet() {
+  return new Set(state.knownAppIds);
 }
 
-function setDetails(appid, details) {
-  if (!state.games[appid]) return;
-  state.games[appid].details = details;
+function isBootstrapped() {
+  return state.knownAppIds.length > 0;
+}
+
+function addKnownAppIds(appids) {
+  const set = getKnownAppIdSet();
+  let changed = false;
+  for (const id of appids) {
+    if (!set.has(id)) {
+      set.add(id);
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.knownAppIds = [...set];
+    save();
+  }
+}
+
+// --- Classification queue: newly-diffed appids waiting on an appdetails +
+// tag lookup to determine whether they're a real, unreleased game.
+
+function getPendingQueue() {
+  return state.pendingClassification;
+}
+
+function enqueuePending(appids) {
+  const queue = new Set(state.pendingClassification);
+  for (const id of appids) queue.add(id);
+  state.pendingClassification = [...queue];
   save();
+}
+
+function dequeuePending(appid) {
+  state.pendingClassification = state.pendingClassification.filter((id) => id !== appid);
+  save();
+}
+
+// --- Tracked games: appids that classified as real, unreleased games.
+
+function createGame(appid, details) {
+  const now = new Date().toISOString();
+  state.games[appid] = {
+    appid,
+    firstSeenAt: now,
+    status: 'new',
+    viewedAt: null,
+    details,
+  };
+  save();
+  return state.games[appid];
 }
 
 function setStatus(appid, status) {
@@ -73,4 +109,15 @@ function all() {
   return Object.values(state.games);
 }
 
-module.exports = { upsertSeen, setDetails, setStatus, getGame, all };
+module.exports = {
+  getKnownAppIdSet,
+  isBootstrapped,
+  addKnownAppIds,
+  getPendingQueue,
+  enqueuePending,
+  dequeuePending,
+  createGame,
+  setStatus,
+  getGame,
+  all,
+};

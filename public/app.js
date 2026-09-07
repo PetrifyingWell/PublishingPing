@@ -9,25 +9,31 @@ const tagSuggestions = document.getElementById('tagSuggestions');
 const selectedTagsEl = document.getElementById('selectedTags');
 
 let activeTab = 'new';
-let allTags = []; // [{id, name}]
-let selectedTags = new Map(); // id -> name
+let allTags = []; // string[]
+let selectedTags = new Set(); // string names
 
-async function loadTagDictionary() {
+async function loadTagList() {
   try {
     const res = await fetch('/api/tags');
     const data = await res.json();
     allTags = data.tags || [];
-    if (data.source !== 'ok') {
-      tagInput.placeholder = 'Tag list unavailable from Steam right now - try again later';
-    }
   } catch {
-    tagInput.placeholder = 'Tag list unavailable from Steam right now - try again later';
+    // Autocomplete just won't populate; typing a tag still works via free entry.
   }
+}
+
+function addTag(name) {
+  selectedTags.add(name);
+  renderSelectedTags();
+  tagInput.value = '';
+  tagSuggestions.hidden = true;
+  tagSuggestions.innerHTML = '';
+  tagInput.focus();
 }
 
 function renderSelectedTags() {
   selectedTagsEl.innerHTML = '';
-  for (const [id, name] of selectedTags) {
+  for (const name of selectedTags) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
     chip.textContent = name;
@@ -35,7 +41,7 @@ function renderSelectedTags() {
     removeBtn.type = 'button';
     removeBtn.textContent = '×';
     removeBtn.addEventListener('click', () => {
-      selectedTags.delete(id);
+      selectedTags.delete(name);
       renderSelectedTags();
     });
     chip.appendChild(removeBtn);
@@ -50,47 +56,32 @@ function renderTagSuggestions(query) {
     tagSuggestions.innerHTML = '';
     return;
   }
-  const matches = allTags
-    .filter((t) => !selectedTags.has(t.id) && t.name.toLowerCase().includes(q))
-    .slice(0, 20);
-
-  if (matches.length === 0) {
-    tagSuggestions.hidden = true;
-    tagSuggestions.innerHTML = '';
-    return;
-  }
+  const matches = allTags.filter((t) => !selectedTags.has(t) && t.toLowerCase().includes(q)).slice(0, 20);
 
   tagSuggestions.innerHTML = '';
   for (const tag of matches) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = tag.name;
-    btn.addEventListener('click', () => {
-      selectedTags.set(tag.id, tag.name);
-      renderSelectedTags();
-      tagInput.value = '';
-      tagSuggestions.hidden = true;
-      tagSuggestions.innerHTML = '';
-      tagInput.focus();
-    });
+    btn.textContent = tag;
+    btn.addEventListener('click', () => addTag(tag));
     tagSuggestions.appendChild(btn);
   }
-  tagSuggestions.hidden = false;
+  tagSuggestions.hidden = matches.length === 0;
 }
 
 tagInput.addEventListener('input', () => renderTagSuggestions(tagInput.value));
+tagInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const value = tagInput.value.trim();
+    if (value) addTag(value);
+  }
+});
 tagInput.addEventListener('blur', () => {
   setTimeout(() => {
     tagSuggestions.hidden = true;
   }, 150);
 });
-
-function reviewClass(percent) {
-  if (percent === null || percent === undefined) return 'unknown';
-  if (percent >= 70) return 'positive';
-  if (percent >= 40) return 'mixed';
-  return 'negative';
-}
 
 function timeAgo(isoString) {
   if (!isoString) return '';
@@ -178,29 +169,103 @@ function actionsForStatus(game) {
   return wrap;
 }
 
+// Builds a simple prev/next/dots carousel cycling through the trailer(s)
+// (if any) followed by full-size screenshots. Falls back to a single
+// static header image when neither is available yet.
+function buildMediaCarousel(game) {
+  const slides = [];
+
+  for (const movie of game.movies || []) {
+    if (movie.mp4) slides.push({ type: 'video', poster: movie.thumbnail, src: movie.mp4 });
+  }
+  for (const shot of game.screenshots || []) {
+    slides.push({ type: 'image', src: shot.full || shot.thumbnail });
+  }
+  if (slides.length === 0 && game.headerImage) {
+    slides.push({ type: 'image', src: game.headerImage });
+  }
+
+  const container = document.createElement('div');
+  container.className = 'media-carousel';
+
+  const viewport = document.createElement('div');
+  viewport.className = 'carousel-viewport';
+  container.appendChild(viewport);
+
+  if (slides.length === 0) return container;
+
+  const slideEls = slides.map((slide, i) => {
+    let el;
+    if (slide.type === 'video') {
+      el = document.createElement('video');
+      el.controls = true;
+      el.preload = 'none';
+      if (slide.poster) el.poster = slide.poster;
+      const source = document.createElement('source');
+      source.src = slide.src;
+      source.type = 'video/mp4';
+      el.appendChild(source);
+    } else {
+      el = document.createElement('img');
+      el.src = slide.src;
+      el.loading = 'lazy';
+      el.alt = `${game.name} media ${i + 1}`;
+    }
+    el.className = 'carousel-slide';
+    el.hidden = i !== 0;
+    viewport.appendChild(el);
+    return el;
+  });
+
+  let current = 0;
+  const dots = [];
+
+  function show(index) {
+    const prevEl = slideEls[current];
+    if (prevEl.tagName === 'VIDEO') prevEl.pause();
+    prevEl.hidden = true;
+    current = (index + slides.length) % slides.length;
+    slideEls[current].hidden = false;
+    dots.forEach((d, i) => d.classList.toggle('active', i === current));
+  }
+
+  if (slides.length > 1) {
+    const prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'carousel-nav prev';
+    prevBtn.textContent = '‹';
+    prevBtn.addEventListener('click', () => show(current - 1));
+
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'carousel-nav next';
+    nextBtn.textContent = '›';
+    nextBtn.addEventListener('click', () => show(current + 1));
+
+    container.appendChild(prevBtn);
+    container.appendChild(nextBtn);
+
+    const dotsWrap = document.createElement('div');
+    dotsWrap.className = 'carousel-dots';
+    slides.forEach((_, i) => {
+      const dot = document.createElement('button');
+      dot.type = 'button';
+      dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+      dot.addEventListener('click', () => show(i));
+      dotsWrap.appendChild(dot);
+      dots.push(dot);
+    });
+    container.appendChild(dotsWrap);
+  }
+
+  return container;
+}
+
 function renderCard(game) {
   const card = document.createElement('div');
   card.className = 'game-card';
 
-  const img = document.createElement('img');
-  img.className = 'header-img';
-  img.src = game.image || '';
-  img.alt = game.name;
-  img.loading = 'lazy';
-  card.appendChild(img);
-
-  if (game.screenshots && game.screenshots.length > 0) {
-    const strip = document.createElement('div');
-    strip.className = 'screenshot-strip';
-    for (const src of game.screenshots) {
-      const shot = document.createElement('img');
-      shot.src = src;
-      shot.loading = 'lazy';
-      shot.alt = `${game.name} screenshot`;
-      strip.appendChild(shot);
-    }
-    card.appendChild(strip);
-  }
+  card.appendChild(buildMediaCarousel(game));
 
   const body = document.createElement('div');
   body.className = 'card-body';
@@ -237,13 +302,6 @@ function renderCard(game) {
     body.appendChild(desc);
   }
 
-  if (game.detailsPending) {
-    const pending = document.createElement('div');
-    pending.className = 'pending-note';
-    pending.textContent = 'Fetching more details from Steam - refresh again shortly for screenshots, developer & publisher.';
-    body.appendChild(pending);
-  }
-
   if (game.tags && game.tags.length > 0) {
     const chips = document.createElement('div');
     chips.className = 'tag-chips readonly';
@@ -265,25 +323,8 @@ function renderCard(game) {
 
   const priceEl = document.createElement('span');
   priceEl.className = 'price';
-  if (game.price.isFree) {
-    priceEl.textContent = 'Free to Play';
-  } else if (game.price.originalPriceText && game.price.originalPriceText !== game.price.priceText) {
-    priceEl.innerHTML = `<span class="original">${game.price.originalPriceText}</span>${game.price.priceText || 'N/A'}`;
-  } else {
-    priceEl.textContent = game.price.priceText || 'N/A';
-  }
+  priceEl.textContent = game.price.isFree ? 'Free to Play' : game.price.priceText || 'TBD';
   metaRow.appendChild(priceEl);
-
-  const badge = document.createElement('span');
-  const cls = reviewClass(game.review && game.review.percent);
-  badge.className = `review-badge ${cls}`;
-  if (game.review && game.review.percent !== null && game.review.percent !== undefined) {
-    const countText = game.review.count ? ` (${game.review.count.toLocaleString()})` : '';
-    badge.textContent = `${game.review.summary || ''} ${game.review.percent}%${countText}`.trim();
-  } else {
-    badge.textContent = 'No reviews yet';
-  }
-  metaRow.appendChild(badge);
 
   if (game.status && game.status !== 'new') {
     const statusBadge = document.createElement('span');
@@ -314,8 +355,7 @@ async function loadNew() {
   const params = new URLSearchParams({
     term: document.getElementById('term').value || '',
   });
-  const tagIds = [...selectedTags.keys()];
-  if (tagIds.length > 0) params.set('tags', tagIds.join(','));
+  if (selectedTags.size > 0) params.set('tags', [...selectedTags].join(','));
 
   statusEl.textContent = 'Loading...';
   refreshBtn.disabled = true;
@@ -326,11 +366,17 @@ async function loadNew() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Request failed');
 
+    if (data.bootstrap) {
+      resultsEl.innerHTML = `<div class="empty-state">${data.message}</div>`;
+      statusEl.textContent = 'Baseline seeded.';
+      return;
+    }
+
     renderGames(data.games, 'No new unreleased pages match these filters in the last 3 days.');
-    const pendingNote = data.pendingDetailFetches > 0
-      ? ` ${data.pendingDetailFetches} game(s) still need extra detail - refresh again shortly.`
+    const queueNote = data.queueRemaining > 0
+      ? ` ${data.queueRemaining} newly-spotted app id(s) still being checked - refresh again shortly.`
       : '';
-    statusEl.textContent = `${data.count} new page(s) found (first seen within 3 days, not yet actioned).${pendingNote} Last refreshed ${new Date().toLocaleTimeString()}.`;
+    statusEl.textContent = `${data.count} new page(s) found (first seen within 3 days, not yet actioned).${queueNote} Last refreshed ${new Date().toLocaleTimeString()}.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
     resultsEl.innerHTML = '<div class="empty-state">Could not load results. Try refreshing.</div>';
@@ -378,6 +424,6 @@ form.addEventListener('submit', (e) => {
   loadTab('new');
 });
 
-loadTagDictionary();
+loadTagList();
 renderSelectedTags();
 loadTab(activeTab);
