@@ -121,10 +121,19 @@ async function getAppList() {
       .map((a) => ({ appid: String(a.appid), name: a.name }));
   } catch (legacyErr) {
     if (!apiKey) {
+      // Diagnostic snapshot of what this invocation's env actually has, so
+      // we can tell "STEAM_API_KEY specifically isn't reaching this
+      // function" apart from "no env vars are reaching it at all".
+      const envSnapshot = {
+        STEAM_API_KEY: typeof apiKey,
+        KV_REST_API_URL: typeof process.env.KV_REST_API_URL,
+        UPSTASH_REDIS_REST_URL: typeof process.env.UPSTASH_REDIS_REST_URL,
+        VERCEL_ENV: process.env.VERCEL_ENV || 'not set',
+      };
       throw new Error(
         `${legacyErr.message} | Steam's free app-list endpoint (ISteamApps/GetAppList) appears to be unavailable. ` +
           'Get a free Steam Web API key at https://steamcommunity.com/dev/apikey, set it as the STEAM_API_KEY ' +
-          'environment variable, and restart the server to use IStoreService/GetAppList instead.'
+          `environment variable, and redeploy to use IStoreService/GetAppList instead. env snapshot: ${JSON.stringify(envSnapshot)}`
       );
     }
     normalized = await getAppListViaStoreService(apiKey);
