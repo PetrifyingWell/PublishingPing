@@ -13,7 +13,7 @@ function redis() {
       'No Redis connection URL found (looked for REDIS_URL, KV_URL, or any *_REDIS_URL / *_KV_URL holding a ' +
         `redis:// or rediss:// URL). Redis-related variables this deployment can see: ${seen.join(', ') || 'none'}. ` +
         `Environment: ${process.env.VERCEL_ENV || 'local'}. If REDIS_URL is listed, its value doesn't start with ` +
-        'redis:// or rediss:// (an https:// REST URL won\'t work). Otherwise connect a Redis database in the Vercel Storage tab, ` +
+        'redis:// or rediss:// (an https:// REST URL won\'t work). Otherwise connect a Redis database in the Vercel Storage tab, ' +
         "enable it for this environment, then redeploy."
     );
   }
