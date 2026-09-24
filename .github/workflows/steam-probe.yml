@@ -1,0 +1,27 @@
+# Temporary: checks whether steamcommunity.com follower counts are readable
+# from GitHub's servers (they return HTTP 429 from Vercel's). Remove after.
+name: Steam follower probe
+
+on:
+  push:
+    branches: [claude/cool-rubin-1j77aq]
+    paths: [.github/workflows/steam-probe.yml]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read follower counts
+        run: |
+          for id in 5285500 1145360 413150 367520 1794680 105600 250900 646570 1086940 588650 2379780 1966720; do
+            code=$(curl -s -o body.xml -w '%{http_code}' -A 'Mozilla/5.0 (compatible; PublishingPing/2.0)' \
+              "https://steamcommunity.com/games/$id/memberslistxml/?xml=1")
+            count=$(grep -o '<memberCount>[0-9]*' body.xml | head -1 | tr -dc 0-9)
+            echo "memberslistxml $id -> HTTP $code, followers: ${count:-none}"
+            sleep 1
+          done
+          for id in 5285500 1145360; do
+            code=$(curl -s -o hub.html -w '%{http_code}' -A 'Mozilla/5.0' "https://steamcommunity.com/app/$id")
+            echo "hub page $id -> HTTP $code"
+            sleep 1
+          done
