@@ -198,7 +198,12 @@ async function recheckNonCandidates(deadline, log, limits) {
 // --- 3. Read followers and ping Slack when all three criteria hold.
 
 async function checkFollowers(app, log) {
-  const followers = await steam.getFollowerCount(app.appid);
+  return recordFollowers(app, await steam.getFollowerCount(app.appid), log);
+}
+
+// Stores a follower reading, then pings if the page now meets all three
+// criteria. Returns true when it pinged.
+async function recordFollowers(app, followers, log) {
   const at = Date.now();
   app = { ...app, followers, lastError: null };
   // Readings after the tracking window can't count towards criterion 1.
@@ -228,10 +233,72 @@ async function checkFollowers(app, log) {
   return true;
 }
 
+// --- Follower readings delivered from outside Vercel.
+//
+// steamcommunity.com rate-limits Vercel's servers, so the GitHub Actions
+// workflow in .github/workflows/followers.yml reads follower counts instead:
+// it asks for the due pages (dueFollowerChecks), reads their counts from
+// Steam and posts them back (recordExternalFollowers).
+
+const EXTERNAL_FRESH_MS = 2 * config.HOUR;
+
+async function dueFollowerChecks(limit = 200) {
+  const ids = await store.due(K.followers, Date.now(), limit);
+  const apps = await store.getApps(ids);
+  const found = new Set(apps.map((a) => a.appid));
+  for (const id of ids) if (!found.has(id)) await store.unschedule(K.followers, id);
+  return apps.filter((a) => a.status === 'tracking' && !a.notifiedAt).map((a) => a.appid);
+}
+
+// `results` is [{ appid, followers }] or [{ appid, error }]. Pages the
+// workflow didn't get to (e.g. it stopped on a 429) stay due.
+async function recordExternalFollowers(results) {
+  const lines = [];
+  const log = (msg) => {
+    console.log(msg);
+    lines.push(msg);
+  };
+  await store.setMeta('lastExternalFollowers', Date.now());
+  const summary = { recorded: 0, pinged: 0, errors: 0, ignored: 0 };
+
+  for (const r of Array.isArray(results) ? results : []) {
+    const appid = Number(r && r.appid);
+    const app = Number.isInteger(appid) ? await store.getApp(appid) : null;
+    if (!app || app.status !== 'tracking' || app.notifiedAt) {
+      summary.ignored++;
+      continue;
+    }
+    try {
+      if (Number.isInteger(r.followers) && r.followers >= 0) {
+        if (await recordFollowers(app, r.followers, log)) summary.pinged++;
+        summary.recorded++;
+      } else {
+        const error = String(r.error || 'no follower count').slice(0, 300);
+        await store.saveApp({ ...app, lastError: error });
+        await store.schedule(K.followers, app.appid, Date.now() + ERROR_RETRY_MS);
+        log(`follower check failed for ${app.appid}: ${error}`);
+        summary.errors++;
+      }
+    } catch (err) {
+      await store.saveApp({ ...app, lastError: err.message.slice(0, 300) });
+      await store.schedule(K.followers, app.appid, Date.now() + ERROR_RETRY_MS);
+      log(`recording followers failed for ${app.appid}: ${err.message}`);
+      summary.errors++;
+    }
+  }
+  log(`Follower report: ${JSON.stringify(summary)}`);
+  return { ...summary, log: lines };
+}
+
+async function externalFollowersActive() {
+  const last = Number(await store.getMeta('lastExternalFollowers')) || 0;
+  return Date.now() - last < EXTERNAL_FRESH_MS;
+}
+
 async function pollFollowers(deadline, log, limits) {
   let checked = 0;
   let pinged = 0;
-  if (limits.community) return { checked, pinged };
+  if (limits.community || limits.external) return { checked, pinged };
   await drain(K.followers, deadline, 100, async (apps) => {
     for (const app of apps) {
       if (Date.now() >= deadline) return false;
@@ -285,24 +352,29 @@ async function runLocked(started, deadline, log, lines) {
   // Followers first: that's the time-sensitive part. Then classify new
   // pages and re-check ones that didn't match, and finally give any page
   // that now matches its first follower read.
-  const limits = { community: false, store: false }; // set when Steam rate-limits a host
+  // community/store: set when Steam rate-limits that host. external: follower
+  // counts are arriving from the GitHub workflow, so Vercel doesn't read them.
+  const limits = { community: false, store: false, external: await externalFollowersActive() };
   const f1 = await pollFollowers(deadline, log, limits);
   const classified = await classifyPending(deadline, log, limits);
   const rechecked = await recheckNonCandidates(deadline, log, limits);
   const f2 = await pollFollowers(deadline, log, limits);
 
-  return {
+  const result = {
     newApps,
     classified,
     followersChecked: f1.checked + f2.checked,
     pinged: f1.pinged + f2.pinged,
     rechecked,
     expired,
-    rateLimited: limits,
+    rateLimited: { community: limits.community, store: limits.store },
+    followersFrom: limits.external ? 'github' : 'vercel',
     queues: await store.queueSizes(),
     tookMs: Date.now() - started,
-    log: lines,
   };
+  // One line per run in the Vercel logs, so it's easy to see what happened.
+  log(`Run summary: ${JSON.stringify(result)}`);
+  return { ...result, log: lines };
 }
 
-module.exports = { run, isCandidate };
+module.exports = { run, isCandidate, dueFollowerChecks, recordExternalFollowers };
