@@ -15,11 +15,11 @@ function buildMessage(app, hit, now = Date.now()) {
     `*<${url}|${app.name}>* gained *${hit.gain.toLocaleString()} followers* in ${fmtDuration(hit.to.at - hit.from.at)}`,
     `Now at *${app.followers.toLocaleString()}* followers (from ${fromLabel})`,
     `Developer & publisher: *${studio}*  ·  No demo released`,
-    `Page appeared ${fmtDuration(now - app.appeared_at)} ago  ·  Release: ${app.release_date || 'TBD'}`,
+    `Page appeared ${fmtDuration(now - app.appearedAt)} ago  ·  Release: ${app.releaseDate || 'TBD'}`,
   ];
 
   const section = { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } };
-  if (app.header_image) section.accessory = { type: 'image', image_url: app.header_image, alt_text: app.name };
+  if (app.headerImage) section.accessory = { type: 'image', image_url: app.headerImage, alt_text: app.name };
 
   return {
     text: `${app.name} gained ${hit.gain} followers (self-published, no demo)`,

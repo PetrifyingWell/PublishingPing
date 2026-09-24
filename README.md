@@ -1,64 +1,71 @@
 # Publishing Ping
 
-Watches every new Steam store page for its first 14 days and posts to Slack the moment a page meets all three criteria:
+Watches every new Steam store page for its first 14 days and posts to a Slack channel when a page meets all three criteria:
 
 1. **Follower spike.** It gains at least **150 followers within any 5-day window** during its first 14 days.
 2. **Self-published.** Its developer name(s) match its publisher name(s). Case, punctuation and company suffixes like "LLC" or "Ltd" are ignored.
 3. **No demo released.** A demo that is listed but still "coming soon" doesn't count as released.
 
-Each page is pinged at most once.
+Each page is pinged at most once. It runs on Vercel: a cron job calls `/api/cron` every hour, and the data lives in Redis. The dashboard at `/` shows what's being tracked.
 
-## How it works
+## Setup (about 10 minutes)
 
-It runs as one long-lived Node process (a worker plus a small dashboard):
+1. **Slack:** go to https://api.slack.com/apps, choose **Create New App**, then **From scratch**. Open **Incoming Webhooks**, turn them on, click **Add New Webhook to Workspace**, and pick the channel. Copy the webhook URL.
+2. **Steam:** get a free Web API key at https://steamcommunity.com/dev/apikey.
+3. **Vercel:** import this repo as a project. Then:
+   - **Storage** tab: connect a Redis database. This adds `REDIS_URL`.
+   - **Settings, then Environment Variables:** add `STEAM_API_KEY`, `SLACK_WEBHOOK_URL`, and `CRON_SECRET` (any long random string).
+   - Redeploy.
 
-| Job | Every | What it does |
-| --- | --- | --- |
-| App-list sync | 20 min | Diffs Steam's full app list (`IStoreService/GetAppList`) against every appid seen before. New appids are new store pages. |
-| Classify | 30 s | Looks up new pages via `appdetails` and keeps games (DLC, software and, by default, NSFW pages are skipped). It records developer, publisher and demo status, and refreshes them every 12 h. |
-| Followers | continuous | Reads each page's follower count from its community group (`steamcommunity.com/games/<appid>/memberslistxml`) and stores a snapshot. |
+That's it. The first cron run records Steam's current catalog as a baseline. From the next run on, every page that appears gets tracked.
 
-How often a page's followers are checked depends on how close it is to qualifying:
+To check the Slack side straight away, run `vercel env pull .env`, `npm install` and `npm run test-slack`. This posts a sample ping.
 
-- Pages that meet criteria 2 and 3: every 60 min, every 15 min once they're halfway to 150, and every 5 min in the last 20%.
-- Every other page: every 6 h. This keeps its history, so if the page later changes (for example, the publisher is changed to the studio itself), it can still qualify.
-
-Just before pinging, the app fetches the page's developer, publisher and demo status again, so it never pings about a page that has just signed a publisher or released a demo.
-
-A page's appearance counts as 0 followers. So a page that already has 170 followers the first time it's polled, a few minutes after it appeared, still qualifies. If a page's appid is in the list before its store page goes public, it counts as appearing when it goes public.
-
-**First run:** there's nothing to diff against yet, so the first sync records the current catalog as the baseline. Tracking starts with the pages that appear after that.
-
-## Setup
+To trigger a run by hand:
 
 ```bash
-cp .env.example .env   # fill in STEAM_API_KEY and SLACK_WEBHOOK_URL
-npm install
-npm run test-slack     # sends a sample ping to check the webhook
-npm start              # dashboard at http://localhost:3000
+curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>.vercel.app/api/cron
 ```
 
-- **Steam API key:** free from https://steamcommunity.com/dev/apikey.
-- **Slack webhook:** create a Slack app, turn on *Incoming Webhooks*, and add a webhook for the channel that should get the pings.
+### Vercel plan and schedule
 
-## Deploying
+`vercel.json` runs the cron **hourly**, which needs Vercel **Pro**. The **Hobby** plan only allows one cron run a day. On Hobby, pick one of these:
 
-This needs an always-on host with a persistent disk, because the follower history is stored in SQLite under `DATA_DIR`. Serverless platforms like Vercel won't work. Any of these do:
+- Change the schedule in `vercel.json` to once a day (for example `"0 9 * * *"`).
+- Keep Vercel Cron daily and use the included GitHub Actions workflow (`.github/workflows/cron.yml`) for hourly runs. In the repo's **Settings**, under **Secrets and variables**, then **Actions**, add a variable `CRON_URL` (`https://<your-app>.vercel.app/api/cron`) and a secret `CRON_SECRET`.
 
-- **Docker:** `docker build -t publishing-ping . && docker run -d --env-file .env -v pp-data:/data -p 3000:3000 publishing-ping`
-- **Railway / Render / Fly.io:** deploy from the Dockerfile, attach a volume at `/data`, and set the env vars.
-- **A VPS:** `npm start` under pm2 or systemd.
+To check every 12 hours instead, use `"0 */12 * * *"`. The 5-day window works with any of these schedules.
 
-`GET /healthz` returns the last sync time and counts for uptime checks. `GET /api/tracked` returns the dashboard data as JSON.
+## How a run works
+
+Each run has a time budget (4 minutes by default, within Vercel's 5-minute limit). Any backlog carries over to the next run.
+
+1. **Find new pages.** It compares Steam's full app list (`IStoreService/GetAppList`) with every appid seen before. Any appid not seen before is a new store page.
+2. **Read followers** for tracked pages that match criteria 2 and 3. The count comes from the page's community group (`steamcommunity.com/games/<appid>/memberslistxml`), and each reading is stored.
+3. **Classify new pages** via `appdetails`. It keeps games only (DLC, software and, by default, NSFW pages are skipped) and records developer, publisher and demo status.
+4. **Re-check pages that didn't match** every 3 days, in case they drop a publisher.
+5. **Ping.** When a page's readings show a 150-follower gain within 5 days, the app re-reads its developer, publisher and demo right away. It posts to Slack only if the page still matches.
+
+A page's appearance counts as 0 followers. So a page already on 170 followers at its first reading still qualifies. If an appid shows up before its store page is public, the page counts as appearing when it goes public.
+
+Only pages that match criteria 2 and 3 get their followers read. This keeps each run well within Steam's rate limits.
+
+## Endpoints
+
+| Path | What |
+| --- | --- |
+| `/` | Dashboard: tracked pages, followers, 5-day gain, ping status |
+| `/api/tracked` | The same data as JSON |
+| `/api/cron` | Runs the tracker (needs `Authorization: Bearer $CRON_SECRET`) |
 
 ## Tuning
 
-All thresholds, windows and polling intervals can be set with environment variables. See `.env.example`.
+Thresholds, windows and intervals can all be set with environment variables. See `.env.example`.
 
-## Tests
+## Development
 
 ```bash
-npm test
+npm install
+npm test           # criteria logic + end-to-end runs against stubbed Steam/Slack and in-memory Redis
+npm run run-once   # one real run against the Redis/Steam/Slack in .env
 ```
-
-These cover the criteria logic and an end-to-end run against stubbed Steam and Slack.

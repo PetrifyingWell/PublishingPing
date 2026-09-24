@@ -1,0 +1,19 @@
+# Optional: triggers the tracker from GitHub Actions instead of Vercel Cron,
+# for Vercel Hobby plans (which only allow one cron run per day).
+# To turn it on, add in the repo's Settings > Secrets and variables > Actions:
+#   variable  CRON_URL     https://<your-app>.vercel.app/api/cron
+#   secret    CRON_SECRET  the same value as the Vercel env var
+name: Publishing Ping cron
+
+on:
+  schedule:
+    - cron: '7 * * * *' # hourly; GitHub may start it a few minutes late
+  workflow_dispatch:
+
+jobs:
+  run:
+    if: vars.CRON_URL != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger a tracker run
+        run: curl --fail-with-body -sS -m 310 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ vars.CRON_URL }}"

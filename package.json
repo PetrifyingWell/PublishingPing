@@ -1,20 +1,22 @@
 {
   "name": "publishing-ping",
   "version": "2.0.0",
+  "private": true,
   "description": "Tracks new Steam store pages for 14 days and pings Slack when a self-published page with no demo gains 150+ followers within 5 days.",
-  "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/index.js",
     "test": "node --test test/*.test.js",
-    "test-slack": "node scripts/test-slack.js"
+    "test-slack": "node scripts/test-slack.js",
+    "run-once": "node scripts/run-once.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "better-sqlite3": "^12.4.1",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "ioredis-mock": "^8.13.1"
   }
 }

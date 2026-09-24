@@ -1,5 +1,5 @@
 // Sends a sample ping so you can check the Slack webhook works:
-//   npm run test-slack
+//   npm run test-slack   (reads SLACK_WEBHOOK_URL from .env; `vercel env pull .env` fetches it)
 const slack = require('../src/slack');
 
 const now = Date.now();
@@ -9,9 +9,9 @@ const app = {
   developers: ['Example Studio'],
   publishers: ['Example Studio'],
   followers: 212,
-  appeared_at: now - 3 * 24 * 3600 * 1000,
-  release_date: 'Coming soon',
-  header_image: null,
+  appearedAt: now - 3 * 24 * 3600 * 1000,
+  releaseDate: 'Coming soon',
+  headerImage: null,
 };
 const hit = { gain: 187, from: { at: now - 2 * 24 * 3600 * 1000, followers: 25 }, to: { at: now, followers: 212 } };
 
