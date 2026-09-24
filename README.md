@@ -1,12 +1,12 @@
 # Publishing Ping
 
-Watches every new Steam store page (and, optionally, a list of subreddits; see [Reddit](#reddit)) for its first 14 days and posts to a Slack channel when a page meets all three criteria:
+Watches every new Steam store page for its first 14 days and posts to a Slack channel when a page meets all three criteria:
 
 1. **Follower spike.** It gains at least **150 followers within any 5-day window** during its first 14 days.
 2. **Self-published.** Its developer name(s) match its publisher name(s). Case, punctuation and company suffixes like "LLC" or "Ltd" are ignored.
 3. **No demo released.** A demo that is listed but still "coming soon" doesn't count as released.
 
-Each page is pinged at most once. It runs on Vercel: a cron job calls `/api/cron` every hour, and the data lives in Redis. The dashboard at `/` shows what's being tracked.
+Each page is pinged at most once. It can also watch a list of subreddits for posts that pass an upvote threshold (see [Reddit](#reddit)). It runs on Vercel: a cron job calls `/api/cron` every hour, and the data lives in Redis. The dashboard at `/` shows what's being tracked.
 
 ## Reddit
 
