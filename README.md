@@ -42,6 +42,19 @@ To trigger a run by hand:
 curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>.vercel.app/api/cron
 ```
 
+### Follower counts via GitHub Actions (required)
+
+Steam's community site, where follower counts live, rate-limits Vercel's servers (HTTP 429) but answers GitHub's. So follower counts are read by a GitHub Actions workflow (`.github/workflows/followers.yml`). Every hour at :30 it asks the app which pages are due, reads their follower counts from Steam, and posts them back to `/api/followers`. Everything else, including the criteria and the Slack pings, still happens on Vercel.
+
+To turn it on, go to the repo's **Settings**, then **Secrets and variables**, then **Actions**, and add:
+
+- a **variable** `APP_URL`: your app's address, e.g. `https://your-app.vercel.app` (no trailing slash)
+- a **secret** `CRON_SECRET`: the same value as in Vercel
+
+To test it straight away, open the **Actions** tab, pick **Steam follower counts**, and click **Run workflow**. The log lists each page's follower count.
+
+While the workflow is reporting, the Vercel run doesn't read follower counts itself. If the workflow stops reporting for 2 hours, Vercel goes back to trying.
+
 ### Vercel plan and schedule
 
 `vercel.json` runs the cron **hourly**, which needs Vercel **Pro**. The **Hobby** plan only allows one cron run a day. On Hobby, pick one of these:
@@ -56,7 +69,7 @@ To check every 12 hours instead, use `"0 */12 * * *"`. The 5-day window works wi
 Each run has a time budget (4 minutes by default, within Vercel's 5-minute limit). Any backlog carries over to the next run.
 
 1. **Find new pages.** It compares Steam's full app list (`IStoreService/GetAppList`) with every appid seen before. Any appid not seen before is a new store page.
-2. **Read followers** for tracked pages that match criteria 2 and 3. The count comes from the page's community group (`steamcommunity.com/games/<appid>/memberslistxml`), and each reading is stored.
+2. **Read followers** for tracked pages that match criteria 2 and 3. The count comes from the page's community group (`steamcommunity.com/games/<appid>/memberslistxml`), and each reading is stored. The GitHub workflow does this part at :30 each hour (see above); Vercel only does it if the workflow isn't reporting.
 3. **Classify new pages** via `appdetails`. It keeps games only (DLC, software and, by default, NSFW pages are skipped) and records developer, publisher and demo status.
 4. **Re-check pages that didn't match** every 3 days, in case they drop a publisher.
 5. **Ping.** When a page's readings show a 150-follower gain within 5 days, the app re-reads its developer, publisher and demo right away. It posts to Slack only if the page still matches.
@@ -72,6 +85,7 @@ Only pages that match criteria 2 and 3 get their followers read. This keeps each
 | `/` | Dashboard: tracked pages, followers, 5-day gain, ping status |
 | `/api/tracked` | The same data as JSON |
 | `/api/cron` | Runs the tracker (needs `Authorization: Bearer $CRON_SECRET`) |
+| `/api/followers` | GET: pages due a follower reading. POST: follower counts read elsewhere (both need `Authorization: Bearer $CRON_SECRET`) |
 
 ## Tuning
 

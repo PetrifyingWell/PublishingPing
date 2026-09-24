@@ -1,0 +1,58 @@
+# Reads Steam follower counts for Publishing Ping. steamcommunity.com
+# rate-limits Vercel's servers, but answers GitHub's, so this workflow asks
+# the app which pages are due, reads their follower counts and posts them
+# back. The app on Vercel does everything else (criteria, Slack pings).
+#
+# Setup, in the repo's Settings > Secrets and variables > Actions:
+#   variable  APP_URL      https://<your-app>.vercel.app   (no trailing slash)
+#   secret    CRON_SECRET  the same value as the Vercel env var
+name: Steam follower counts
+
+on:
+  schedule:
+    - cron: '30 * * * *' # hourly, half an hour after the Vercel cron; GitHub may start it a few minutes late
+  workflow_dispatch:
+
+concurrency:
+  group: steam-followers
+  cancel-in-progress: false
+
+jobs:
+  followers:
+    if: vars.APP_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_URL: ${{ vars.APP_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: Read follower counts and report them
+        run: |
+          set -euo pipefail
+          auth="Authorization: Bearer $CRON_SECRET"
+          due=$(curl --fail-with-body -sS -m 60 -H "$auth" "$APP_URL/api/followers")
+          ids=$(echo "$due" | jq -r '.appids[]')
+          echo "Pages due: $(echo "$ids" | grep -c . || true)"
+
+          results='[]'
+          for id in $ids; do
+            rm -f body.xml
+            code=$(curl -s -m 20 -o body.xml -w '%{http_code}' -A 'Mozilla/5.0 (compatible; PublishingPing/2.0)' \
+              "https://steamcommunity.com/games/$id/memberslistxml/?xml=1") || true
+            if [ "$code" = 429 ]; then
+              echo "Steam rate-limited at $id (HTTP 429); the rest stay due for the next run."
+              break
+            fi
+            count=$( { grep -so '<memberCount>[0-9]*' body.xml || true; } | head -1 | tr -dc 0-9)
+            if [ "$code" = 200 ] && [ -n "$count" ]; then
+              results=$(jq -c --argjson a "$id" --argjson f "$count" '. + [{appid: $a, followers: $f}]' <<<"$results")
+              echo "$id: $count followers"
+            else
+              results=$(jq -c --argjson a "$id" --arg e "HTTP $code from steamcommunity.com" '. + [{appid: $a, error: $e}]' <<<"$results")
+              echo "$id: failed (HTTP $code)"
+            fi
+            sleep 1
+          done
+
+          jq -c '{results: .}' <<<"$results" | curl --fail-with-body -sS -m 120 -H "$auth" \
+            -H 'Content-Type: application/json' --data-binary @- "$APP_URL/api/followers" | jq 'del(.log)'

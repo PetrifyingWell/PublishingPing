@@ -166,3 +166,48 @@ test('a 429 from Steam pauses follower checks until the next run, leaving pages 
   assert.strictEqual(next.rateLimited.community, false);
   assert.strictEqual((await store.due(store.K.followers, Date.now(), 100)).length, 0);
 });
+
+test('follower counts reported from GitHub are recorded, ping, and pause Vercel reads', async () => {
+  appList = appList.concat([
+    { appid: 50, name: 'External A' },
+    { appid: 51, name: 'External B' },
+  ]);
+  details[50] = game('External A', 'Dev E', 'Dev E');
+  details[51] = game('External B', 'Dev F', 'Dev F');
+  followers[50] = 5;
+  followers[51] = 5;
+  await tracker.run();
+  await makeDue(50, 51);
+
+  const due = await tracker.dueFollowerChecks();
+  assert.ok(due.includes(50) && due.includes(51));
+
+  const before = pings.length;
+  const report = await tracker.recordExternalFollowers([
+    { appid: 50, followers: 200 },
+    { appid: 51, error: 'HTTP 500 from steamcommunity.com' },
+    { appid: 999999, followers: 10 },
+    { appid: 'x' },
+  ]);
+  assert.deepStrictEqual(
+    { recorded: report.recorded, pinged: report.pinged, errors: report.errors, ignored: report.ignored },
+    { recorded: 1, pinged: 1, errors: 1, ignored: 2 }
+  );
+  assert.strictEqual(pings.length, before + 1);
+  assert.match(pings[pings.length - 1].text, /External A/);
+  assert.strictEqual((await app(51)).lastError, 'HTTP 500 from steamcommunity.com');
+
+  // While GitHub is reporting, the Vercel run doesn't read followers itself.
+  let calls = 0;
+  const realGetFollowerCount = steam.getFollowerCount;
+  steam.getFollowerCount = async () => {
+    calls++;
+    return 0;
+  };
+  await makeDue(51);
+  const result = await tracker.run();
+  steam.getFollowerCount = realGetFollowerCount;
+  assert.strictEqual(calls, 0);
+  assert.strictEqual(result.followersFrom, 'github');
+  assert.ok(result.log.some((l) => l.startsWith('Run summary: ')));
+});
