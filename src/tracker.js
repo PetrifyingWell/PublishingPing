@@ -111,8 +111,9 @@ async function applyDetails(app, data) {
   return updated;
 }
 
-// Works through a queue's due entries until it's empty or the deadline
-// passes. Entries whose record has expired out of Redis are dropped.
+// Works through a queue's due entries until it's empty, the deadline passes
+// or `handle` returns false. Entries whose record has expired out of Redis
+// are dropped.
 async function drain(queue, deadline, batchSize, handle) {
   while (Date.now() < deadline) {
     const ids = await store.due(queue, Date.now(), batchSize);
@@ -120,15 +121,21 @@ async function drain(queue, deadline, batchSize, handle) {
     const apps = await store.getApps(ids);
     const found = new Set(apps.map((a) => a.appid));
     for (const id of ids) if (!found.has(id)) await store.unschedule(queue, id);
-    await handle(apps);
+    if ((await handle(apps)) === false) return;
   }
 }
 
-async function classifyPending(deadline, log) {
+// Steam answers "too many requests" with HTTP 429. Once that happens,
+// further requests to the same host this run only make it worse, so the
+// affected step stops and leaves its remaining pages due for the next run.
+const isRateLimited = (err) => err && err.status === 429;
+
+async function classifyPending(deadline, log, limits) {
   let done = 0;
+  if (limits.store) return done;
   await drain(K.pending, deadline, 20, async (apps) => {
     for (const app of apps) {
-      if (Date.now() >= deadline) return;
+      if (Date.now() >= deadline) return false;
       await store.unschedule(K.pending, app.appid);
       if (Date.now() - app.firstSeenAt > config.pendingGiveUpMs) {
         await store.saveApp({ ...app, status: 'ignored', ignoreReason: 'never_public' });
@@ -148,29 +155,43 @@ async function classifyPending(deadline, log) {
         done++;
       } catch (err) {
         await store.saveApp({ ...app, lastError: err.message.slice(0, 300) });
+        if (isRateLimited(err)) {
+          await store.schedule(K.pending, app.appid, Date.now());
+          limits.store = true;
+          log('Steam is rate-limiting store lookups (HTTP 429); pausing them until the next run.');
+          return false;
+        }
         await store.schedule(K.pending, app.appid, Date.now() + ERROR_RETRY_MS);
         log(`appdetails failed for ${app.appid}: ${err.message}`);
       }
     }
+    return true;
   });
   return done;
 }
 
-async function recheckNonCandidates(deadline, log) {
+async function recheckNonCandidates(deadline, log, limits) {
   let done = 0;
+  if (limits.store) return done;
   await drain(K.recheck, deadline, 20, async (apps) => {
     for (const app of apps) {
-      if (Date.now() >= deadline) return;
+      if (Date.now() >= deadline) return false;
       try {
         const res = await steam.getAppDetails(app.appid);
         if (res.ok) await applyDetails(app, res.data);
         else await store.schedule(K.recheck, app.appid, Date.now() + config.nonCandidateRecheckMs * EARLY);
         done++;
       } catch (err) {
+        if (isRateLimited(err)) {
+          limits.store = true;
+          log('Steam is rate-limiting store lookups (HTTP 429); pausing them until the next run.');
+          return false;
+        }
         await store.schedule(K.recheck, app.appid, Date.now() + ERROR_RETRY_MS);
         log(`recheck failed for ${app.appid}: ${err.message}`);
       }
     }
+    return true;
   });
   return done;
 }
@@ -208,26 +229,29 @@ async function checkFollowers(app, log) {
   return true;
 }
 
-async function pollFollowers(deadline, log) {
+async function pollFollowers(deadline, log, limits) {
   let checked = 0;
   let pinged = 0;
+  if (limits.community) return { checked, pinged };
   await drain(K.followers, deadline, 100, async (apps) => {
-    // A small worker pool; each worker stops picking up pages at the deadline.
-    let next = 0;
-    const worker = async () => {
-      while (next < apps.length && Date.now() < deadline) {
-        const app = apps[next++];
-        try {
-          if (await checkFollowers(app, log)) pinged++;
-          checked++;
-        } catch (err) {
-          await store.saveApp({ ...app, lastError: err.message.slice(0, 300) });
-          await store.schedule(K.followers, app.appid, Date.now() + ERROR_RETRY_MS);
-          log(`follower check failed for ${app.appid}: ${err.message}`);
+    for (const app of apps) {
+      if (Date.now() >= deadline) return false;
+      try {
+        if (await checkFollowers(app, log)) pinged++;
+        checked++;
+      } catch (err) {
+        await store.saveApp({ ...app, lastError: err.message.slice(0, 300) });
+        if (isRateLimited(err)) {
+          // Left due, so this page is first in line next run.
+          limits.community = true;
+          log(`Steam is rate-limiting follower checks (HTTP 429); pausing them until the next run.`);
+          return false;
         }
+        await store.schedule(K.followers, app.appid, Date.now() + ERROR_RETRY_MS);
+        log(`follower check failed for ${app.appid}: ${err.message}`);
       }
-    };
-    await Promise.all(Array.from({ length: config.followerConcurrency }, worker));
+    }
+    return true;
   });
   return { checked, pinged };
 }
@@ -272,10 +296,11 @@ async function runLocked(started, deadline, log, lines) {
   // Followers first: that's the time-sensitive part. Then classify new
   // pages and re-check ones that didn't match, and finally give any page
   // that now matches its first follower read.
-  const f1 = await pollFollowers(deadline, log);
-  const classified = await classifyPending(deadline, log);
-  const rechecked = await recheckNonCandidates(deadline, log);
-  const f2 = await pollFollowers(deadline, log);
+  const limits = { community: false, store: false }; // set when Steam rate-limits a host
+  const f1 = await pollFollowers(deadline, log, limits);
+  const classified = await classifyPending(deadline, log, limits);
+  const rechecked = await recheckNonCandidates(deadline, log, limits);
+  const f2 = await pollFollowers(deadline, log, limits);
 
   return {
     newApps,
@@ -284,6 +309,7 @@ async function runLocked(started, deadline, log, lines) {
     pinged: f1.pinged + f2.pinged,
     rechecked,
     expired,
+    rateLimited: limits,
     queues: await store.queueSizes(),
     reddit: redditResult,
     tookMs: Date.now() - started,

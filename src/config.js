@@ -69,7 +69,9 @@ module.exports = {
   // any backlog for the next run. Keep below maxDuration in vercel.json.
   runBudgetMs: num('RUN_BUDGET_SECONDS', 240) * 1000,
   storeThrottleMs: num('STORE_THROTTLE_MS', 1500), // store.steampowered.com allows roughly 200 requests / 5 min
-  followerConcurrency: num('FOLLOWER_CONCURRENCY', 4),
+  // steamcommunity.com (follower counts) answers bursts with HTTP 429, so
+  // follower reads go one at a time with this gap between them.
+  communityThrottleMs: num('COMMUNITY_THROTTLE_MS', 1000),
 
   // Pages whose store data isn't public yet get retried for this long.
   pendingGiveUpMs: num('PENDING_GIVE_UP_DAYS', 14) * DAY,
