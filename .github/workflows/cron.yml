@@ -16,4 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger a tracker run
-        run: curl --fail-with-body -sS -m 310 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ vars.CRON_URL }}"
+        env:
+          CRON_URL: ${{ vars.CRON_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body -sS -m 310 -H "Authorization: Bearer $CRON_SECRET" "$CRON_URL"
