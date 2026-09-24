@@ -42,6 +42,15 @@ module.exports = {
   redisUrl: findRedisUrl(),
   cronSecret: process.env.CRON_SECRET || '',
 
+  // Reddit (optional; skipped unless all three are set).
+  redditClientId: process.env.REDDIT_CLIENT_ID || '',
+  redditClientSecret: process.env.REDDIT_CLIENT_SECRET || '',
+  redditSubreddits: process.env.REDDIT_SUBREDDITS || '', // "IndieGaming:500, indiegames:300"
+  // Reddit asks for a descriptive User-Agent naming the app and its owner.
+  redditUserAgent:
+    process.env.REDDIT_USER_AGENT ||
+    `web:publishing-ping:v2.0${process.env.REDDIT_USERNAME ? ` (by /u/${process.env.REDDIT_USERNAME})` : ''}`,
+
   // The criteria.
   trackingWindowMs: num('TRACKING_WINDOW_DAYS', 14) * DAY,
   gainWindowMs: num('GAIN_WINDOW_DAYS', 5) * DAY,

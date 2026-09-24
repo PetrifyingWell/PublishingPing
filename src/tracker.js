@@ -5,6 +5,7 @@ const config = require('./config');
 const store = require('./store');
 const steam = require('./steam');
 const slack = require('./slack');
+const reddit = require('./reddit');
 const { isSelfPublished, findQualifyingGain, hasReleasedDemo } = require('./criteria');
 
 const { K } = store;
@@ -256,6 +257,16 @@ async function run({ budgetMs = config.runBudgetMs } = {}) {
 async function runLocked(started, deadline, log, lines) {
   if (!config.slackWebhookUrl) log('WARNING: SLACK_WEBHOOK_URL is not set, so pings will fail until it is.');
 
+  // Reddit first: it's a handful of quick requests, so the Steam steps below
+  // can't starve it of time. Its failures never stop the Steam checks.
+  let redditResult;
+  try {
+    redditResult = await reddit.run(log);
+  } catch (err) {
+    redditResult = { error: err.message };
+    log(`Reddit check failed: ${err.message}`);
+  }
+
   const expired = await store.expireTracked(started - config.trackingWindowMs);
   const newApps = await syncAppList(log);
   // Followers first: that's the time-sensitive part. Then classify new
@@ -274,6 +285,7 @@ async function runLocked(started, deadline, log, lines) {
     rechecked,
     expired,
     queues: await store.queueSizes(),
+    reddit: redditResult,
     tookMs: Date.now() - started,
     log: lines,
   };

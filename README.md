@@ -1,12 +1,27 @@
 # Publishing Ping
 
-Watches every new Steam store page for its first 14 days and posts to a Slack channel when a page meets all three criteria:
+Watches every new Steam store page (and, optionally, a list of subreddits; see [Reddit](#reddit)) for its first 14 days and posts to a Slack channel when a page meets all three criteria:
 
 1. **Follower spike.** It gains at least **150 followers within any 5-day window** during its first 14 days.
 2. **Self-published.** Its developer name(s) match its publisher name(s). Case, punctuation and company suffixes like "LLC" or "Ltd" are ignored.
 3. **No demo released.** A demo that is listed but still "coming soon" doesn't count as released.
 
 Each page is pinged at most once. It runs on Vercel: a cron job calls `/api/cron` every hour, and the data lives in Redis. The dashboard at `/` shows what's being tracked.
+
+## Reddit
+
+The same hourly run can also watch a list of subreddits. It pings Slack when any post reaches that subreddit's upvote threshold (Reddit's score, i.e. upvotes minus downvotes). Every post counts, not just ones linking to Steam, and each post is pinged once. Stickied posts are skipped, and so are NSFW posts unless `EXCLUDE_NSFW=false`.
+
+To turn it on:
+
+1. Go to https://www.reddit.com/prefs/apps and click **create another app**. Choose **script**, enter any name, and set the redirect uri to `http://localhost:8080` (it's required but never used).
+2. In Vercel, add these environment variables and redeploy:
+   - `REDDIT_CLIENT_ID`: the string under the app name.
+   - `REDDIT_CLIENT_SECRET`: the value labelled **secret**.
+   - `REDDIT_SUBREDDITS`: subreddits with their thresholds, like `IndieGaming:500, indiegames:200, IndieDev:300`.
+   - `REDDIT_USERNAME` (optional): your Reddit username, which Reddit asks apps to include in their requests.
+
+Each run reads each subreddit's top posts of the past week. The first time a subreddit is checked, posts that are already over its threshold are recorded without pinging, so you don't get a flood of old posts. From then on, only posts that newly pass their threshold get pinged. The dashboard lists posts from the last 7 days that passed their threshold.
 
 ## Setup (about 10 minutes)
 
