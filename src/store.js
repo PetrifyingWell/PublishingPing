@@ -7,9 +7,14 @@ let client = null;
 function redis() {
   if (client) return client;
   if (!config.redisUrl) {
+    // Names only, never values, so this is safe to show in logs.
+    const seen = Object.keys(process.env).filter((k) => /REDIS|KV_|UPSTASH/.test(k));
     throw new Error(
-      'REDIS_URL is not set. Connect a Redis database to this Vercel project (Storage tab), make sure REDIS_URL ' +
-        "is enabled for this deployment's environment, then redeploy."
+      'No Redis connection URL found (looked for REDIS_URL, KV_URL, or any *_REDIS_URL / *_KV_URL holding a ' +
+        `redis:// or rediss:// URL). Redis-related variables this deployment can see: ${seen.join(', ') || 'none'}. ` +
+        `Environment: ${process.env.VERCEL_ENV || 'local'}. If REDIS_URL is listed, its value doesn't start with ` +
+        'redis:// or rediss:// (an https:// REST URL won\'t work). Otherwise connect a Redis database in the Vercel Storage tab, ` +
+        "enable it for this environment, then redeploy."
     );
   }
   client = new Redis(config.redisUrl, { maxRetriesPerRequest: 3 });

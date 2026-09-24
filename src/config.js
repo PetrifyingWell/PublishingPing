@@ -19,6 +19,19 @@ function bool(name, fallback) {
   return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
 
+// Vercel's Redis integrations name this variable differently depending on
+// the provider and on any custom prefix chosen when connecting the store
+// (REDIS_URL, KV_URL, STORAGE_REDIS_URL, ...). Take the first that holds a
+// redis:// or rediss:// URL.
+function findRedisUrl() {
+  const isRedis = (v) => /^rediss?:\/\//.test(v || '');
+  for (const name of ['REDIS_URL', 'KV_URL']) if (isRedis(process.env[name])) return process.env[name];
+  for (const [name, value] of Object.entries(process.env)) {
+    if (/(REDIS|KV)_URL$/.test(name) && isRedis(value)) return value;
+  }
+  return '';
+}
+
 module.exports = {
   MINUTE,
   HOUR,
@@ -26,7 +39,7 @@ module.exports = {
 
   steamApiKey: process.env.STEAM_API_KEY || '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
-  redisUrl: process.env.REDIS_URL || '',
+  redisUrl: findRedisUrl(),
   cronSecret: process.env.CRON_SECRET || '',
 
   // The criteria.
