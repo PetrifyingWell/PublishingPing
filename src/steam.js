@@ -49,6 +49,7 @@ function throttled(gapMs) {
 }
 
 const storeQueue = throttled(config.storeThrottleMs);
+const communityQueue = throttled(config.communityThrottleMs);
 
 // Every game currently listed on the store. Needs a free Steam Web API key
 // (https://steamcommunity.com/dev/apikey) - the old keyless
@@ -97,12 +98,14 @@ async function getAppDetails(appid) {
 
 // Follower count, read from the app's community group. This is the same
 // "Followers" number shown on the store / community hub.
-// Concurrency is limited by the caller.
 async function getFollowerCount(appid) {
-  const xml = await fetchText(`https://steamcommunity.com/games/${appid}/memberslistxml/?xml=1`, { timeoutMs: 15000 });
-  const match = xml.match(/<memberCount>\s*(\d+)\s*<\/memberCount>/i);
-  if (!match) throw new Error(`No <memberCount> in follower XML for ${appid}: ${xml.slice(0, 200)}`);
-  return Number(match[1]);
+  return communityQueue(async () => {
+    const url = `https://steamcommunity.com/games/${appid}/memberslistxml/?xml=1`;
+    const xml = await fetchText(url, { timeoutMs: 15000 });
+    const match = xml.match(/<memberCount>\s*(\d+)\s*<\/memberCount>/i);
+    if (!match) throw new Error(`No <memberCount> in follower XML for ${appid}: ${xml.slice(0, 200)}`);
+    return Number(match[1]);
+  });
 }
 
 // Steam's content-descriptor ids for nudity/sexual content specifically

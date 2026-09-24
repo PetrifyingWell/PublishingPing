@@ -5,6 +5,7 @@ const assert = require('node:assert');
 process.env.STEAM_API_KEY = 'test';
 process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.test/x';
 process.env.STORE_THROTTLE_MS = '0';
+process.env.COMMUNITY_THROTTLE_MS = '0';
 
 const RedisMock = require('ioredis-mock');
 const store = require('../src/store');
@@ -132,4 +133,36 @@ test('pages leave the queues once their 14 days are up', async () => {
   const result = await tracker.run();
   assert.strictEqual(result.expired, 1);
   assert.strictEqual(await store.redis().zscore(store.K.followers, 23), null);
+});
+
+test('a 429 from Steam pauses follower checks until the next run, leaving pages due', async () => {
+  appList = appList.concat([
+    { appid: 40, name: 'Rate A' },
+    { appid: 41, name: 'Rate B' },
+  ]);
+  details[40] = game('Rate A', 'Dev A', 'Dev A');
+  details[41] = game('Rate B', 'Dev B', 'Dev B');
+  await tracker.run();
+
+  const realGetFollowerCount = steam.getFollowerCount;
+  let calls = 0;
+  steam.getFollowerCount = async () => {
+    calls++;
+    const err = new Error('responded with HTTP 429');
+    err.status = 429;
+    throw err;
+  };
+  await makeDue(40, 41);
+  const result = await tracker.run();
+  steam.getFollowerCount = realGetFollowerCount;
+
+  assert.strictEqual(calls, 1); // stopped after the first 429
+  assert.strictEqual(result.rateLimited.community, true);
+  assert.ok(result.log.some((l) => /pausing them until the next run/.test(l)));
+  const due = (await store.due(store.K.followers, Date.now(), 100)).sort();
+  assert.deepStrictEqual(due, [40, 41]); // both still first in line
+
+  const next = await tracker.run();
+  assert.strictEqual(next.rateLimited.community, false);
+  assert.strictEqual((await store.due(store.K.followers, Date.now(), 100)).length, 0);
 });
