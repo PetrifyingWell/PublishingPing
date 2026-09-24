@@ -1,19 +1,20 @@
 {
-  "name": "steam-publishing-list-tool",
-  "version": "1.0.0",
-  "description": "Find newly-appeared Steam store pages (new releases / upcoming) filtered by genre, for publishing outreach.",
-  "main": "server.js",
+  "name": "publishing-ping",
+  "version": "2.0.0",
+  "description": "Tracks new Steam store pages for 14 days and pings Slack when a self-published page with no demo gains 150+ followers within 5 days.",
+  "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "test-slack": "node scripts/test-slack.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
-    "cheerio": "^1.0.0",
+    "better-sqlite3": "^12.4.1",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "ioredis": "^5.4.1"
+    "express": "^4.19.2"
   }
 }
