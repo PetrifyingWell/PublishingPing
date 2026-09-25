@@ -54,7 +54,7 @@ module.exports = {
   // The criteria.
   trackingWindowMs: num('TRACKING_WINDOW_DAYS', 14) * DAY,
   gainWindowMs: num('GAIN_WINDOW_DAYS', 5) * DAY,
-  followerGainThreshold: num('FOLLOWER_GAIN_THRESHOLD', 150),
+  followerGainThreshold: num('FOLLOWER_GAIN_THRESHOLD', 50),
   excludeNsfw: bool('EXCLUDE_NSFW', true),
 
   // Pages that match criteria 2 and 3 get their followers read this often.

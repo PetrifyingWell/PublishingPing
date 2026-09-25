@@ -2,7 +2,7 @@
 
 Watches every new Steam store page for its first 14 days and posts to a Slack channel when a page meets all three criteria:
 
-1. **Follower spike.** It gains at least **150 followers within any 5-day window** during its first 14 days.
+1. **Follower spike.** It gains at least **50 followers within any 5-day window** during its first 14 days.
 2. **Self-published.** Its developer name(s) match its publisher name(s). Case, punctuation and company suffixes like "LLC" or "Ltd" are ignored.
 3. **No demo released.** A demo that is listed but still "coming soon" doesn't count as released.
 
@@ -72,9 +72,9 @@ Each run has a time budget (4 minutes by default, within Vercel's 5-minute limit
 2. **Read followers** for tracked pages that match criteria 2 and 3. The count comes from the page's community group (`steamcommunity.com/games/<appid>/memberslistxml`), and each reading is stored. The GitHub workflow does this part at :30 each hour (see above); Vercel only does it if the workflow isn't reporting.
 3. **Classify new pages** via `appdetails`. It keeps games only (DLC, software and, by default, NSFW pages are skipped) and records developer, publisher and demo status.
 4. **Re-check pages that didn't match** every 3 days, in case they drop a publisher.
-5. **Ping.** When a page's readings show a 150-follower gain within 5 days, the app re-reads its developer, publisher and demo right away. It posts to Slack only if the page still matches.
+5. **Ping.** When a page's readings show a 50-follower gain within 5 days, the app re-reads its developer, publisher and demo right away. It posts to Slack only if the page still matches.
 
-A page's appearance counts as 0 followers. So a page already on 170 followers at its first reading still qualifies. If an appid shows up before its store page is public, the page counts as appearing when it goes public.
+A page's appearance counts as 0 followers. So a page already on 60 followers at its first reading still qualifies. If an appid shows up before its store page is public, the page counts as appearing when it goes public.
 
 Only pages that match criteria 2 and 3 get their followers read. This keeps each run well within Steam's rate limits.
 
