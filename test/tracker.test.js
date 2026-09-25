@@ -5,6 +5,8 @@ const assert = require('node:assert');
 process.env.STEAM_API_KEY = 'test';
 process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.test/x';
 process.env.STORE_THROTTLE_MS = '0';
+// These scenarios are written around a 150-follower threshold.
+process.env.FOLLOWER_GAIN_THRESHOLD = '150';
 process.env.COMMUNITY_THROTTLE_MS = '0';
 
 const RedisMock = require('ioredis-mock');
