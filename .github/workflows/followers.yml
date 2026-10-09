@@ -3,6 +3,11 @@
 # the app which pages are due, reads their follower counts and posts them
 # back. The app on Vercel does everything else (criteria, Slack pings).
 #
+# GitHub runs the schedule below only a few times a day, so the hourly Vercel
+# cron also starts this workflow directly when GITHUB_DISPATCH_TOKEN is set
+# in Vercel (see README). Each run reads for at most ~100 seconds, which
+# keeps it to about 2 billed minutes.
+#
 # Setup, in the repo's Settings > Secrets and variables > Actions:
 #   variable  APP_URL      https://<your-app>.vercel.app   (no trailing slash)
 #   secret    CRON_SECRET  the same value as the Vercel env var
@@ -35,7 +40,12 @@ jobs:
           echo "Pages due: $(echo "$ids" | grep -c . || true)"
 
           results='[]'
+          stop_at=$((SECONDS + 100))
           for id in $ids; do
+            if [ "$SECONDS" -ge "$stop_at" ]; then
+              echo "Time's up for this run; the rest stay due for the next run."
+              break
+            fi
             rm -f body.xml
             code=$(curl -s -m 20 -o body.xml -w '%{http_code}' -A 'Mozilla/5.0 (compatible; PublishingPing/2.0)' \
               "https://steamcommunity.com/games/$id/memberslistxml/?xml=1") || true

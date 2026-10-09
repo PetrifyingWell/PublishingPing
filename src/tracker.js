@@ -5,7 +5,8 @@ const config = require('./config');
 const store = require('./store');
 const steam = require('./steam');
 const slack = require('./slack');
-const { isSelfPublished, findQualifyingGain, hasReleasedDemo } = require('./criteria');
+const github = require('./github');
+const { isSelfPublished, findQualifyingGain, currentWindowGain, hasReleasedDemo } = require('./criteria');
 
 const { K } = store;
 const ERROR_RETRY_MS = config.HOUR;
@@ -201,6 +202,15 @@ async function checkFollowers(app, log) {
   return recordFollowers(app, await steam.getFollowerCount(app.appid), log);
 }
 
+// How long until a page's next follower reading: hourly once it's halfway
+// to the threshold, less often while it's barely moving.
+function followerInterval(app) {
+  const gain = currentWindowGain(app.snapshots || [], app.appearedAt, config.gainWindowMs);
+  if (gain >= config.followerGainThreshold * 0.5) return config.followerIntervalMs;
+  if (gain >= config.followerGainThreshold * 0.2) return config.followerIntervalWarmMs;
+  return config.followerIntervalQuietMs;
+}
+
 // Stores a follower reading, then pings if the page now meets all three
 // criteria. Returns true when it pinged.
 async function recordFollowers(app, followers, log) {
@@ -212,7 +222,7 @@ async function recordFollowers(app, followers, log) {
   const hit = findQualifyingGain(app.snapshots, app.appearedAt, criteriaOptions());
   if (!hit) {
     await store.saveApp(app);
-    await store.schedule(K.followers, app.appid, at + config.followerIntervalMs * EARLY);
+    await store.schedule(K.followers, app.appid, at + followerInterval(app) * EARLY);
     return false;
   }
 
@@ -240,7 +250,7 @@ async function recordFollowers(app, followers, log) {
 // it asks for the due pages (dueFollowerChecks), reads their counts from
 // Steam and posts them back (recordExternalFollowers).
 
-const EXTERNAL_FRESH_MS = 2 * config.HOUR;
+const EXTERNAL_FRESH_MS = 12 * config.HOUR;
 
 async function dueFollowerChecks(limit = 200) {
   const ids = await store.due(K.followers, Date.now(), limit);
@@ -360,6 +370,16 @@ async function runLocked(started, deadline, log, lines) {
   const rechecked = await recheckNonCandidates(deadline, log, limits);
   const f2 = await pollFollowers(deadline, log, limits);
 
+  // New pages are classified by now, so this is the moment to have GitHub
+  // read follower counts. A failure here never fails the run.
+  let followerWorkflow;
+  try {
+    followerWorkflow = await github.dispatchFollowerWorkflow();
+  } catch (err) {
+    followerWorkflow = `failed: ${err.message}`;
+    log(`Couldn't start the GitHub follower workflow: ${err.message}`);
+  }
+
   const result = {
     newApps,
     classified,
@@ -369,6 +389,7 @@ async function runLocked(started, deadline, log, lines) {
     expired,
     rateLimited: { community: limits.community, store: limits.store },
     followersFrom: limits.external ? 'github' : 'vercel',
+    followerWorkflow,
     queues: await store.queueSizes(),
     tookMs: Date.now() - started,
   };
