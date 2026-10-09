@@ -61,6 +61,22 @@ module.exports = {
   // Each cron run reads every page that is due, so this is effectively
   // "every cron run" unless set higher than the cron schedule.
   followerIntervalMs: num('FOLLOWER_INTERVAL_HOURS', 1) * HOUR,
+  // Steam only allows so many follower reads, so pages that are barely
+  // moving are read less often. "Warm" = gained at least 20% of the
+  // threshold in the current window; "hot" (read every FOLLOWER_INTERVAL_HOURS)
+  // = at least 50%.
+  followerIntervalWarmMs: num('FOLLOWER_INTERVAL_WARM_HOURS', 4) * HOUR,
+  followerIntervalQuietMs: num('FOLLOWER_INTERVAL_QUIET_HOURS', 12) * HOUR,
+
+  // Optional: lets the hourly Vercel cron start the GitHub follower workflow
+  // itself, because GitHub runs scheduled workflows only a few times a day.
+  // A fine-grained token with "Actions: Read and write" on this repo.
+  githubDispatchToken: process.env.GITHUB_DISPATCH_TOKEN || '',
+  githubRepo:
+    process.env.GITHUB_REPO ||
+    (process.env.VERCEL_GIT_REPO_OWNER && process.env.VERCEL_GIT_REPO_SLUG
+      ? `${process.env.VERCEL_GIT_REPO_OWNER}/${process.env.VERCEL_GIT_REPO_SLUG}`
+      : ''),
   // Pages that don't match criteria 2 and 3 get their developer / publisher
   // / demo re-read this often, in case they change and start matching.
   nonCandidateRecheckMs: num('NON_CANDIDATE_RECHECK_HOURS', 72) * HOUR,

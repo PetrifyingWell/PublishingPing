@@ -20,6 +20,7 @@ async function trackedRows() {
       demoReleased: (a.demos || []).some((d) => d.released),
       matches: !!a.candidate,
       followers: a.followers ?? null,
+      checkedAt: (a.snapshots || []).length ? a.snapshots[a.snapshots.length - 1].at : null,
       gain: currentWindowGain(a.snapshots || [], a.appearedAt, config.gainWindowMs),
       appearedAt: a.appearedAt,
       notifiedAt: a.notifiedAt || null,
@@ -83,6 +84,7 @@ function renderPage({ lastRun, bootstrapped, games, reddit: redditData }) {
   <td>${esc(g.publishers.join(', '))}</td>
   <td>${g.demoReleased ? 'Yes' : 'No'}</td>
   <td class="n">${g.followers ?? '–'}</td>
+  <td>${g.matches && !g.notifiedAt ? esc(ago(g.checkedAt)) : '–'}</td>
   <td class="n">${g.matches ? g.gain : '–'}</td>
   <td>${esc(ago(g.appearedAt))}</td>
   <td>${g.notifiedAt ? `Pinged ${esc(ago(g.notifiedAt))}` : g.matches ? 'Watching' : 'Not a match'}</td>
@@ -108,9 +110,9 @@ tr.muted td{color:var(--muted)}tr.pinged td{background:var(--hl)}
 <h2 style="margin-top:8px">Steam</h2>
 <p>New Steam pages from the last ${days(config.trackingWindowMs)} days. Slack gets a ping when a self-published page with no released demo
 gains ${config.followerGainThreshold}+ followers within ${days(config.gainWindowMs)} days. Last run: ${esc(ago(lastRun))}.</p>
-<div class="wrap"><table><thead><tr><th>Game</th><th>Developer</th><th>Publisher</th><th>Demo out</th><th>Followers</th>
+<div class="wrap"><table><thead><tr><th>Game</th><th>Developer</th><th>Publisher</th><th>Demo out</th><th>Followers</th><th>Checked</th>
 <th>${days(config.gainWindowMs)}-day gain</th><th>Appeared</th><th>Status</th></tr></thead>
-<tbody>${rows || `<tr><td colspan="8">${empty}</td></tr>`}</tbody></table></div>
+<tbody>${rows || `<tr><td colspan="9">${empty}</td></tr>`}</tbody></table></div>
 ${redditSection(redditData)}
 </body></html>`;
 }

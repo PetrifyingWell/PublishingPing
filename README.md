@@ -53,7 +53,18 @@ To turn it on, go to the repo's **Settings**, then **Secrets and variables**, th
 
 To test it straight away, open the **Actions** tab, pick **Steam follower counts**, and click **Run workflow**. The log lists each page's follower count.
 
-While the workflow is reporting, the Vercel run doesn't read follower counts itself. If the workflow stops reporting for 2 hours, Vercel goes back to trying.
+**Make it run every hour.** GitHub only runs scheduled workflows a few times a day, so the hourly Vercel cron should start the workflow itself. That needs a GitHub token:
+
+1. On GitHub, open your profile picture, then **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**.
+2. Name it `Publishing Ping`, pick an expiration, and under **Repository access** choose **Only select repositories** with `PublishingPing`.
+3. Under **Permissions → Repository permissions**, set **Actions** to **Read and write**. Leave everything else as it is.
+4. Generate it, copy it, and add it in Vercel as `GITHUB_DISPATCH_TOKEN`. Redeploy.
+
+Each Vercel run's summary then shows `"followerWorkflow": "started"`. When the token expires, it shows `failed: … HTTP 401`, and that's your cue to make a new one.
+
+Steam allows roughly 60 follower reads per run, so pages are read as often as they need: every hour once a page has gained half the threshold in the current 5-day window, every 4 hours once it has gained 20%, and every 12 hours otherwise. The dashboard's **Checked** column shows when each page was last read.
+
+While the workflow is reporting, the Vercel run doesn't read follower counts itself. If the workflow stops reporting for 12 hours, Vercel goes back to trying.
 
 ### Vercel plan and schedule
 
