@@ -47,7 +47,12 @@ To test it straight away, open the **Actions** tab, pick **Steam follower counts
 
 Each Vercel run's summary then shows `"followerWorkflow": "started"`. When the token expires, it shows `failed: … HTTP 401`, and that's your cue to make a new one.
 
-Every matching page is due a follower reading every hour. The dashboard's **Checked** column shows when each page was last read.
+**How often each page is read.** Steam allows roughly 50 follower reads from one machine, then blocks for about 10–13 minutes. The workflow reads pages oldest-reading-first, starting with pages that have never been read:
+
+- **Public repo** (Actions minutes are free): each hourly run keeps reading for up to 50 minutes and waits out Steam's blocks, about 200 readings an hour. With around 2,500 matching pages, every page is read about every 12 hours.
+- **Private repo**: each run stops after about a minute to stay inside the 2,000 free Actions minutes a month. That's about 50 readings per run, so a full cycle takes a couple of days.
+
+The workflow checks the repo's visibility itself, so nothing needs changing after you make the repo public. The dashboard's **Checked** column shows when each page was last read.
 
 While the workflow is reporting, the Vercel run doesn't read follower counts itself. If the workflow stops reporting for 12 hours, Vercel goes back to trying.
 
