@@ -1,4 +1,5 @@
-# Temporary diagnostic: what Steam returns for "Left Left Left". Remove after.
+# Temporary diagnostic: how many pages need follower reads, and how long
+# steamcommunity.com's rate limit lasts. Remove after.
 name: Steam probe
 
 on:
@@ -9,18 +10,33 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_URL: ${{ vars.APP_URL }}
     steps:
-      - name: Look up the game
+      - name: Count tracked pages
         run: |
-          curl -s 'https://store.steampowered.com/api/storesearch/?term=Left%20Left%20Left&cc=us&l=en' | jq -c '.items[] | {id, name, type}'
-          for id in $(curl -s 'https://store.steampowered.com/api/storesearch/?term=Left%20Left%20Left&cc=us&l=en' | jq -r '.items[].id'); do
-            echo "=== $id"
-            curl -s "https://store.steampowered.com/api/appdetails?appids=$id&l=english" | jq -c ".[\"$id\"].data | {type, name, developers, publishers, release_date, fullgame, demos, recommendations}"
-            sleep 1
-            curl -s -A 'Mozilla/5.0' "https://steamcommunity.com/games/$id/memberslistxml/?xml=1" | head -c 900 | tr '\n' ' '
-            echo
-            sleep 1
-            curl -s -o /dev/null -w 'community hub /app/%{http_code} -> %{redirect_url}\n' "https://steamcommunity.com/app/$id"
-            curl -s -A 'Mozilla/5.0' "https://steamcommunity.com/app/$id" | grep -oiE '[0-9,]+ *(members|followers|in-game|online)' | head -5
+          curl -s "$APP_URL/api/tracked" > tracked.json
+          jq '{total: (.games|length), matching: ([.games[]|select(.matches and (.notifiedAt|not))]|length), pinged: ([.games[]|select(.notifiedAt)]|length), queues}' tracked.json
+          jq -r '[.games[]|select(.matches and (.notifiedAt|not))|.followers] | group_by(. // -1 | if . < 0 then "none" elif . < 5 then "0-4" elif . < 20 then "5-19" elif . < 50 then "20-49" else "50+" end) | map({(.[0] // -1 | if . < 0 then "none" elif . < 5 then "0-4" elif . < 20 then "5-19" elif . < 50 then "20-49" else "50+" end): length}) | add' tracked.json
+          jq -r '.games[]|select(.appid==5362020)' tracked.json
+      - name: Measure the rate limit
+        run: |
+          ids=$(jq -r '.games[]|select(.matches)|.appid' tracked.json | head -400)
+          start=$SECONDS; ok=0; limited_at=""
+          for id in $ids; do
+            [ $((SECONDS-start)) -ge 900 ] && break
+            code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "https://steamcommunity.com/games/$id/memberslistxml/?xml=1") || true
+            if [ "$code" = 429 ]; then
+              t0=$SECONDS; echo "429 after $ok reads ($((SECONDS-start))s in)"
+              while :; do
+                sleep 15
+                code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "https://steamcommunity.com/games/$id/memberslistxml/?xml=1") || true
+                [ "$code" = 200 ] && { echo "  recovered after $((SECONDS-t0))s"; break; }
+                [ $((SECONDS-start)) -ge 900 ] && break 2
+              done
+            fi
+            ok=$((ok+1))
             sleep 1
           done
+          echo "Total successful reads: $ok in $((SECONDS-start))s"
