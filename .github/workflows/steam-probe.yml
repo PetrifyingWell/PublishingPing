@@ -1,0 +1,26 @@
+# Temporary diagnostic: what Steam returns for "Left Left Left". Remove after.
+name: Steam probe
+
+on:
+  push:
+    branches: [claude/cool-rubin-1j77aq]
+    paths: [.github/workflows/steam-probe.yml]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Look up the game
+        run: |
+          curl -s 'https://store.steampowered.com/api/storesearch/?term=Left%20Left%20Left&cc=us&l=en' | jq -c '.items[] | {id, name, type}'
+          for id in $(curl -s 'https://store.steampowered.com/api/storesearch/?term=Left%20Left%20Left&cc=us&l=en' | jq -r '.items[].id'); do
+            echo "=== $id"
+            curl -s "https://store.steampowered.com/api/appdetails?appids=$id&l=english" | jq -c ".[\"$id\"].data | {type, name, developers, publishers, release_date, fullgame, demos, recommendations}"
+            sleep 1
+            curl -s -A 'Mozilla/5.0' "https://steamcommunity.com/games/$id/memberslistxml/?xml=1" | head -c 900 | tr '\n' ' '
+            echo
+            sleep 1
+            curl -s -o /dev/null -w 'community hub /app/%{http_code} -> %{redirect_url}\n' "https://steamcommunity.com/app/$id"
+            curl -s -A 'Mozilla/5.0' "https://steamcommunity.com/app/$id" | grep -oiE '[0-9,]+ *(members|followers|in-game|online)' | head -5
+            sleep 1
+          done
