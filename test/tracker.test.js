@@ -214,28 +214,6 @@ test('follower counts reported from GitHub are recorded, ping, and pause Vercel 
   assert.ok(result.log.some((l) => l.startsWith('Run summary: ')));
 });
 
-test('quiet pages are read every 12h, warming ones every 4h, close ones hourly', async () => {
-  appList = appList.concat([
-    { appid: 60, name: 'Quiet' },
-    { appid: 61, name: 'Warm' },
-    { appid: 62, name: 'Hot' },
-  ]);
-  for (const id of [60, 61, 62]) details[id] = game(`Game ${id}`, `Dev ${id}`, `Dev ${id}`);
-  await tracker.run();
-  // Threshold is 150 in this file: warm >= 30, hot >= 75.
-  const report = await tracker.recordExternalFollowers([
-    { appid: 60, followers: 5 },
-    { appid: 61, followers: 40 },
-    { appid: 62, followers: 100 },
-  ]);
-  assert.strictEqual(report.recorded, 3);
-  const H = 3600 * 1000;
-  const nextIn = async (id) => Math.round(((await store.redis().zscore(store.K.followers, id)) - Date.now()) / H);
-  assert.strictEqual(await nextIn(60), 11); // 12h, pulled 10% early
-  assert.strictEqual(await nextIn(61), 4);
-  assert.strictEqual(await nextIn(62), 1);
-});
-
 test('the cron run starts the GitHub follower workflow when a token is set', async () => {
   const config = require('../src/config');
   const realFetch = global.fetch;

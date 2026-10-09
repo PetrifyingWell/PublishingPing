@@ -47,7 +47,7 @@ To test it straight away, open the **Actions** tab, pick **Steam follower counts
 
 Each Vercel run's summary then shows `"followerWorkflow": "started"`. When the token expires, it shows `failed: … HTTP 401`, and that's your cue to make a new one.
 
-Steam allows roughly 60 follower reads per run, so pages are read as often as they need: every hour once a page has gained half the threshold in the current 5-day window, every 4 hours once it has gained 20%, and every 12 hours otherwise. The dashboard's **Checked** column shows when each page was last read.
+Every matching page is due a follower reading every hour. The dashboard's **Checked** column shows when each page was last read.
 
 While the workflow is reporting, the Vercel run doesn't read follower counts itself. If the workflow stops reporting for 12 hours, Vercel goes back to trying.
 
